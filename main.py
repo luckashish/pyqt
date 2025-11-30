@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         self.chart_tabs.tabCloseRequested.connect(self._on_tab_close)
         
         # Add default charts
-        for symbol in ["EURUSD.H1", "GBPUSD.H1", "USDJPY.H1", "USDCHF.H1"]:
+        for symbol in ["EURUSD.H1", "GBPUSD.H1", "USDJPY.H1", "USDCHF.H1","SBIN-EQ"]:
             chart_widget = self._create_chart_widget(symbol)
             self.chart_tabs.addTab(chart_widget, symbol)
         
@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         self.symbols_table.horizontalHeader().setStretchLastSection(True)
         self.symbols_table.setAlternatingRowColors(True)
         self.symbols_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.symbols_table.setEditTriggers(QTableWidget.NoEditTriggers)  # Disable editing
         self.symbols_table.doubleClicked.connect(self._on_symbol_double_click)
         
         mw_tabs.addTab(self.symbols_table, "Symbols")
@@ -463,6 +464,7 @@ class MainWindow(QMainWindow):
         if symbols:
             QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[0]))
             QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[1]))
+            QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[2]))
         
         # Start time timer only (market data handled by worker)
         self._setup_timers()
@@ -582,9 +584,10 @@ class MainWindow(QMainWindow):
             
         self.chart_tabs.removeTab(index)
 
-    @pyqtSlot(QModelIndex)
+    """@pyqtSlot(QModelIndex)
     def _on_symbol_double_click(self, index):
         """Handle symbol double click."""
+        print("ashish")
         row = index.row()
         symbol_item = self.symbols_table.item(row, 0)
         if symbol_item:
@@ -596,7 +599,7 @@ class MainWindow(QMainWindow):
             self._fetch_chart_data(symbol_name)
             
             # Also show order dialog (existing functionality)
-            # self._show_new_order_dialog()
+            # self._show_new_order_dialog()"""
 
     @pyqtSlot(Symbol)
     def _on_tick_received(self, symbol: Symbol):
@@ -721,6 +724,7 @@ class MainWindow(QMainWindow):
         if symbol_item:
             symbol = symbol_item.text().replace("● ", "")
             logger.info(f"Opening chart for {symbol}")
+            QTimer.singleShot(1000, lambda: self._fetch_chart_data(symbol))
             # In full implementation, would open new chart tab
     
     def _place_market_order(self, symbol: str, order_type_str: str):
