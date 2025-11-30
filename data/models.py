@@ -19,8 +19,10 @@ class OrderStatus(Enum):
     """Order status enumeration."""
     PENDING = "pending"
     ACTIVE = "active"
+    FILLED = "filled"
     CLOSED = "closed"
     CANCELLED = "cancelled"
+    REJECTED = "rejected"
 
 
 @dataclass
@@ -76,6 +78,7 @@ class Order:
     close_price: Optional[float] = None
     close_time: Optional[datetime] = None
     comment: str = ""
+    rejection_reason: str = ""
     
     def calculate_profit(self, current_price: float, pip_value: float = 10.0) -> float:
         """

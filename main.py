@@ -23,7 +23,7 @@ from core.feed_manager import feed_manager
 from brokers.factory import broker_factory
 from brokers.registry import register_builtin_brokers
 from data.models import Symbol, Order
-from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker
+from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker, OrderBookWorker
 
 
 class MainWindow(QMainWindow):
@@ -362,10 +362,118 @@ class MainWindow(QMainWindow):
         journal_widget.setStyleSheet("font-family: monospace;")
         terminal_tabs.addTab(journal_widget, "Journal")
         
+        # Order Book tab
+        self.order_book_tab = self._create_order_book_tab()
+        terminal_tabs.addTab(self.order_book_tab, "Order Book")
+        
+        # Connect tab change to auto-refresh
+        terminal_tabs.currentChanged.connect(self._on_terminal_tab_changed)
+        self.terminal_tabs = terminal_tabs
+        
         terminal_layout.addWidget(terminal_tabs)
         
         self.terminal_dock.setWidget(terminal_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+
+    def _create_order_book_tab(self):
+        """Create Order Book tab widget."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Toolbar
+        toolbar = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(QIcon.fromTheme("view-refresh"))
+        refresh_btn.clicked.connect(self._refresh_order_book)
+        toolbar.addWidget(refresh_btn)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        
+        # Table
+        self.order_book_table = QTableWidget(0, 11)
+        self.order_book_table.setHorizontalHeaderLabels([
+            "Ticket", "Symbol", "Type", "Status", "Volume", "Price", 
+            "Trigger", "Time", "Rejection Reason", "Comment", "Exchange ID"
+        ])
+        self.order_book_table.horizontalHeader().setStretchLastSection(True)
+        self.order_book_table.setAlternatingRowColors(True)
+        self.order_book_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.order_book_table)
+        
+        return widget
+
+    def _on_terminal_tab_changed(self, index):
+        """Handle terminal tab change."""
+        tab_text = self.terminal_tabs.tabText(index)
+        if tab_text == "Order Book":
+            self._refresh_order_book()
+
+    def _refresh_order_book(self):
+        """Refresh order book data."""
+        if not hasattr(self, 'order_book_worker'):
+            self.order_book_worker = OrderBookWorker(self.broker)
+            self.order_book_worker.data_received.connect(self._update_order_book_table)
+            self.order_book_worker.error_occurred.connect(
+                lambda err: self.status_bar.showMessage(f"Order Book Error: {err}", 5000)
+            )
+        
+        if not self.order_book_worker.isRunning():
+            self.status_bar.showMessage("Refreshing Order Book...", 2000)
+            self.order_book_worker.start()
+
+    def _update_order_book_table(self, orders):
+        """Update Order Book table with data."""
+        self.order_book_table.setRowCount(len(orders))
+        
+        for row, order in enumerate(orders):
+            # Ticket
+            self.order_book_table.setItem(row, 0, QTableWidgetItem(str(order.ticket)))
+            
+            # Symbol
+            self.order_book_table.setItem(row, 1, QTableWidgetItem(order.symbol))
+            
+            # Type
+            type_item = QTableWidgetItem(order.order_type.value)
+            if "buy" in order.order_type.value.lower():
+                type_item.setForeground(QColor("#4caf50"))
+            else:
+                type_item.setForeground(QColor("#f44336"))
+            self.order_book_table.setItem(row, 2, type_item)
+            
+            # Status
+            status_item = QTableWidgetItem(order.status.value.upper())
+            if order.status.value == "active":
+                status_item.setForeground(QColor("#2196f3"))
+            elif order.status.value == "filled":
+                status_item.setForeground(QColor("#4caf50"))
+            elif order.status.value == "rejected":
+                status_item.setForeground(QColor("#f44336"))
+            self.order_book_table.setItem(row, 3, status_item)
+            
+            # Volume
+            self.order_book_table.setItem(row, 4, QTableWidgetItem(str(order.volume)))
+            
+            # Price
+            self.order_book_table.setItem(row, 5, QTableWidgetItem(f"{order.open_price:.2f}"))
+            
+            # Trigger Price (placeholder if not in model yet)
+            self.order_book_table.setItem(row, 6, QTableWidgetItem(""))
+            
+            # Time
+            time_str = order.open_time.strftime("%H:%M:%S") if order.open_time else ""
+            self.order_book_table.setItem(row, 7, QTableWidgetItem(time_str))
+            
+            # Rejection Reason
+            self.order_book_table.setItem(row, 8, QTableWidgetItem(order.rejection_reason))
+            
+            # Comment
+            self.order_book_table.setItem(row, 9, QTableWidgetItem(order.comment))
+            
+            # Exchange ID (placeholder)
+            self.order_book_table.setItem(row, 10, QTableWidgetItem(""))
+            
+        self.status_bar.showMessage(f"Order Book updated: {len(orders)} orders", 3000)
     
     def _create_account_info_bar(self):
         """Create account information bar."""
@@ -584,22 +692,7 @@ class MainWindow(QMainWindow):
             
         self.chart_tabs.removeTab(index)
 
-    """@pyqtSlot(QModelIndex)
-    def _on_symbol_double_click(self, index):
-        """Handle symbol double click."""
-        print("ashish")
-        row = index.row()
-        symbol_item = self.symbols_table.item(row, 0)
-        if symbol_item:
-            # Extract symbol name (remove the "● " prefix)
-            symbol_text = symbol_item.text()
-            symbol_name = symbol_text.replace("● ", "")
-            
-            # Fetch chart data
-            self._fetch_chart_data(symbol_name)
-            
-            # Also show order dialog (existing functionality)
-            # self._show_new_order_dialog()"""
+
 
     @pyqtSlot(Symbol)
     def _on_tick_received(self, symbol: Symbol):

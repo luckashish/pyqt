@@ -152,3 +152,24 @@ class HistoricalDataWorker(QThread):
         except Exception as e:
             logger.error(f"Historical data worker error: {e}")
             self.error_occurred.emit(str(e))
+
+
+class OrderBookWorker(QThread):
+    """Background worker for fetching order book."""
+    
+    # Signals
+    data_received = pyqtSignal(list)   # List of Order objects
+    error_occurred = pyqtSignal(str)   # Error message
+    
+    def __init__(self, broker):
+        super().__init__()
+        self.broker = broker
+    
+    def run(self):
+        """Fetch order book in background."""
+        try:
+            orders = self.broker.get_order_book()
+            self.data_received.emit(orders)
+        except Exception as e:
+            logger.error(f"Order book worker error: {e}")
+            self.error_occurred.emit(str(e))

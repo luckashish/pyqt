@@ -126,34 +126,40 @@ class ShoonyaOrderManager:
             logger.error(f"Cancel order error: {e}")
             return False
     
-    def get_open_orders(self) -> List[Order]:
-        """Get all open orders."""
+    def get_order_book(self) -> List[Order]:
+        """Get full order book (all statuses)."""
         api = self.auth_manager.get_api()
         if not api:
-            return self.open_orders
+            return []
         
         try:
             # Refresh from API
             result = api.get_order_book()
             
+            orders = []
             if result:
-                self.open_orders = []
                 for order_data in result:
-                    if order_data.get('status') in ['OPEN', 'PENDING', 'TRIGGER_PENDING']:
-                        # Parse order
-                        order = self._parse_order(order_data)
-                        if order:
-                            self.open_orders.append(order)
+                    # Parse order
+                    order = self._parse_order(order_data)
+                    if order:
+                        orders.append(order)
             
-            return self.open_orders
+            return orders
             
         except Exception as e:
             logger.error(f"Error getting order book: {e}")
-            return self.open_orders
+            return []
+
+    def get_open_orders(self) -> List[Order]:
+        """Get all open orders."""
+        all_orders = self.get_order_book()
+        self.open_orders = [o for o in all_orders if o.status in [OrderStatus.ACTIVE, OrderStatus.PENDING]]
+        return self.open_orders
     
     def get_order_history(self) -> List[Order]:
         """Get order history."""
-        # TODO: Implement full order history
+        all_orders = self.get_order_book()
+        self.closed_orders = [o for o in all_orders if o.status in [OrderStatus.CLOSED, OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.FILLED]]
         return self.closed_orders
     
     def _parse_order(self, order_data: dict) -> Optional[Order]:
@@ -161,15 +167,32 @@ class ShoonyaOrderManager:
         try:
             order_type = OrderType.BUY if order_data.get('trantype') == 'B' else OrderType.SELL
             
+            # Map status
+            status_map = {
+                'OPEN': OrderStatus.ACTIVE,
+                'PENDING': OrderStatus.PENDING,
+                'TRIGGER_PENDING': OrderStatus.PENDING,
+                'COMPLETE': OrderStatus.FILLED,
+                'CANCELED': OrderStatus.CANCELLED,
+                'REJECTED': OrderStatus.REJECTED
+            }
+            
+            shoonya_status = order_data.get('status', 'OPEN')
+            status = status_map.get(shoonya_status, OrderStatus.ACTIVE)
+            
+            # Handle rejection reason
+            rej_reason = order_data.get('rejreason', '')
+            
             return Order(
                 ticket=int(order_data.get('norenordno', 0)),
                 symbol=order_data.get('tsym', ''),
                 order_type=order_type,
                 volume=float(order_data.get('qty', 0)),
                 open_price=float(order_data.get('prc', 0)),
-                open_time=datetime.now(),  # Parse from order_data['norentm']
-                status=OrderStatus.ACTIVE,
-                comment=order_data.get('remarks', '')
+                open_time=datetime.now(),  # Note: In real app, parse 'norentm'
+                status=status,
+                comment=order_data.get('remarks', ''),
+                rejection_reason=rej_reason
             )
         except Exception as e:
             logger.error(f"Error parsing order: {e}")

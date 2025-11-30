@@ -172,6 +172,12 @@ class ShoonyaBroker(BrokerBase):
             return self.order_manager.get_order_history()
         return []
     
+    def get_order_book(self) -> List[Order]:
+        """Get full order book."""
+        if self.order_manager:
+            return self.order_manager.get_order_book()
+        return []
+    
     def get_account_info(self) -> dict:
         """Get account information."""
         # TODO: Implement account manager
