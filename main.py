@@ -4,6 +4,7 @@ A comprehensive trading platform built with PyQt5
 """
 import sys
 import os
+from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QDockWidget, QTabWidget, 
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
@@ -11,7 +12,7 @@ from PyQt5.QtWidgets import (
     QMenuBar, QMenu,QAction, QToolBar, QStatusBar, QSplitter,
     QMessageBox
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot
+from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QModelIndex
 from PyQt5.QtGui import QIcon, QColor, QFont
 
 # Import our modules
@@ -166,6 +167,7 @@ class MainWindow(QMainWindow):
         self.chart_tabs = QTabWidget()
         self.chart_tabs.setTabsClosable(True)
         self.chart_tabs.setMovable(True)
+        self.chart_tabs.tabCloseRequested.connect(self._on_tab_close)
         
         # Add default charts
         for symbol in ["EURUSD.H1", "GBPUSD.H1", "USDJPY.H1", "USDCHF.H1"]:
@@ -176,21 +178,33 @@ class MainWindow(QMainWindow):
     
     def _create_chart_widget(self, symbol_timeframe: str):
         """Create a single chart widget."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        from ui.charts.chart_widget import ChartWidget
         
-        # Chart placeholder
-        chart_label = QLabel(f"Chart: {symbol_timeframe}")
-        chart_label.setAlignment(Qt.AlignCenter)
-        chart_label.setStyleSheet("background-color: #1a1a1a; color: #888; font-size: 24px; border: 1px solid #333;")
-        chart_label.setMinimumHeight(400)
-        layout.addWidget(chart_label)
+        # Create chart widget
+        symbol = symbol_timeframe.split('.')[0]
+        chart = ChartWidget(symbol)
         
-        # One-click trading panel
-        trading_panel = self._create_one_click_trading(symbol_timeframe.split('.')[0])
-        layout.addWidget(trading_panel,  0, Qt.AlignRight | Qt.AlignTop)
+        # Store reference to update later
+        if not hasattr(self, 'charts'):
+            self.charts = {}
+        self.charts[symbol] = chart
         
-        return widget
+        # Add one-click trading panel overlay or side widget
+        # For now, we'll wrap it in a layout to add the trading panel
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add chart
+        layout.addWidget(chart)
+        
+        # Overlay trading panel (simplified as side widget for now)
+        trading_panel = self._create_one_click_trading(symbol)
+        # Note: In a real MT5 style, this would be an overlay. 
+        # For now, we'll just add it to the layout or keep it separate.
+        # Let's add it to the chart layout if possible or just return container
+        
+        return container
     
     def _create_one_click_trading(self, symbol: str):
         """Create one-click trading widget."""
@@ -445,6 +459,11 @@ class MainWindow(QMainWindow):
         self.quote_worker.update_failed.connect(lambda err: logger.error(f"Quote worker error: {err}"))
         self.quote_worker.start()
         
+        # TEST: Auto-fetch chart data for first symbol
+        if symbols:
+            QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[0]))
+            QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[1]))
+        
         # Start time timer only (market data handled by worker)
         self._setup_timers()
     
@@ -481,6 +500,103 @@ class MainWindow(QMainWindow):
             ask_item = QTableWidgetItem(f"{symbol.ask:.5f}")
             ask_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.symbols_table.setItem(row, 2, ask_item)
+
+    def _fetch_chart_data(self, symbol_name):
+        """
+        Fetch chart data for a symbol.
+        Triggered by double click on symbol table.
+        """
+        from utils.worker_threads import HistoricalDataWorker
+        from datetime import timedelta
+        
+        try:
+            logger.info(f"Opening chart for {symbol_name}")
+            
+            # 1. Check if tab already exists
+            tab_index = -1
+            for i in range(self.chart_tabs.count()):
+                if self.chart_tabs.tabText(i) == symbol_name:
+                    tab_index = i
+                    break
+            
+            # 2. Open or focus chart tab
+            if tab_index != -1:
+                # Tab exists, switch to it
+                self.chart_tabs.setCurrentIndex(tab_index)
+            else:
+                # Tab does not exist, create it
+                chart_container = self._create_chart_widget(f"{symbol_name}.M5")
+                self.chart_tabs.addTab(chart_container, symbol_name)
+                self.chart_tabs.setCurrentIndex(self.chart_tabs.count() - 1)
+            
+            # 3. Fetch data
+            logger.info(f"Requesting chart data for {symbol_name}")
+            
+            # Example: Fetch last 7 days of M5 data
+            end_time = datetime.now()
+            start_time = end_time - timedelta(days=7)
+            
+            # Keep track of workers to prevent GC
+            if not hasattr(self, 'active_workers'):
+                self.active_workers = []
+                
+            # Clean up finished workers
+            self.active_workers = [w for w in self.active_workers if w.isRunning()]
+            
+            worker = HistoricalDataWorker(
+                self.broker, 
+                symbol_name, 
+                "M5", 
+                start_time, 
+                end_time
+            )
+            
+            # Connect signal to update specific chart
+            chart_widget = self.charts[symbol_name]
+            worker.data_received.connect(chart_widget.update_chart)
+            
+            worker.data_received.connect(
+                lambda data: logger.info(f"Received {len(data)} candles for {symbol_name}")
+            )
+            worker.error_occurred.connect(
+                lambda err: logger.error(f"Chart data error for {symbol_name}: {err}")
+            )
+            
+            # Store worker reference
+            self.active_workers.append(worker)
+            worker.start()
+            logger.info(f"Worker started for {symbol_name}")
+            
+        except Exception as e:
+            logger.error(f"Error in _fetch_chart_data: {e}", exc_info=True)
+            self.status_bar.showMessage(f"Error opening chart: {e}")
+
+    def _on_tab_close(self, index):
+        """Handle tab close request."""
+        tab_text = self.chart_tabs.tabText(index)
+        logger.info(f"Closing tab: {tab_text}")
+        
+        # Remove from charts dict
+        if hasattr(self, 'charts') and tab_text in self.charts:
+            del self.charts[tab_text]
+            
+        self.chart_tabs.removeTab(index)
+
+    @pyqtSlot(QModelIndex)
+    def _on_symbol_double_click(self, index):
+        """Handle symbol double click."""
+        row = index.row()
+        symbol_item = self.symbols_table.item(row, 0)
+        if symbol_item:
+            # Extract symbol name (remove the "● " prefix)
+            symbol_text = symbol_item.text()
+            symbol_name = symbol_text.replace("● ", "")
+            
+            # Fetch chart data
+            self._fetch_chart_data(symbol_name)
+            
+            # Also show order dialog (existing functionality)
+            # self._show_new_order_dialog()
 
     @pyqtSlot(Symbol)
     def _on_tick_received(self, symbol: Symbol):

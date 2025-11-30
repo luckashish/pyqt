@@ -117,7 +117,13 @@ class ShoonyaBroker(BrokerBase):
         end_time: datetime
     ) -> List[OHLCData]:
         """Get historical data."""
-        # TODO: Implement historical data
+        if self.market_data_manager:
+            return self.market_data_manager.get_historical_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_time=start_time,
+                end_time=end_time
+            )
         return []
     
     def place_order(

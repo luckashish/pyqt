@@ -117,3 +117,38 @@ class OrderPlacementWorker(QThread):
         except Exception as e:
             logger.error(f"Order placement worker error: {e}")
             self.order_failed.emit(str(e))
+
+
+class HistoricalDataWorker(QThread):
+    """Background worker for fetching historical data."""
+    
+    # Signals
+    data_received = pyqtSignal(list)   # List of OHLCData
+    error_occurred = pyqtSignal(str)   # Error message
+    
+    def __init__(self, broker, symbol, timeframe, start_time, end_time):
+        super().__init__()
+        self.broker = broker
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.start_time = start_time
+        self.end_time = end_time
+    
+    def run(self):
+        """Fetch data in background."""
+        try:
+            data = self.broker.get_historical_data(
+                self.symbol,
+                self.timeframe,
+                self.start_time,
+                self.end_time
+            )
+            
+            if data:
+                self.data_received.emit(data)
+            else:
+                self.error_occurred.emit(f"No data received for {self.symbol}")
+                
+        except Exception as e:
+            logger.error(f"Historical data worker error: {e}")
+            self.error_occurred.emit(str(e))
