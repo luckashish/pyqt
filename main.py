@@ -4,13 +4,12 @@ A comprehensive trading platform built with PyQt5
 """
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QDockWidget, QTabWidget, 
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
-    QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QPushButton,
-    QMenuBar, QMenu,QAction, QToolBar, QStatusBar, QSplitter,
-    QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, 
+    QTreeWidgetItem, QPushButton, QMenuBar, QMenu, QAction, 
+    QToolBar, QStatusBar, QSplitter, QMessageBox
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QModelIndex
 from PyQt5.QtGui import QIcon, QColor, QFont
@@ -23,7 +22,11 @@ from core.feed_manager import feed_manager
 from brokers.factory import broker_factory
 from brokers.registry import register_builtin_brokers
 from data.models import Symbol, Order
-from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker, OrderBookWorker
+from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker, HistoricalDataWorker
+
+# UI Modules
+from ui.market_watch import MarketWatch
+from ui.terminal import Terminal
 
 
 class MainWindow(QMainWindow):
@@ -67,13 +70,16 @@ class MainWindow(QMainWindow):
         self._create_chart_area()
         
         # Create Market Watch dock (left)
-        self._create_market_watch()
+        self.market_watch = MarketWatch(self)
+        self.market_watch.symbol_double_clicked.connect(self._fetch_chart_data)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.market_watch)
         
         # Create Navigator dock (left, below market watch)
         self._create_navigator()
         
         # Create Terminal dock (bottom)
-        self._create_terminal()
+        self.terminal = Terminal(self.broker, self)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal)
         
         # Create status bar
         self._create_status_bar()
@@ -243,281 +249,6 @@ class MainWindow(QMainWindow):
         
         return panel
     
-    def _create_market_watch(self):
-        """Create Market Watch dock."""
-        self.market_watch_dock = QDockWidget("Market Watch", self)
-        self.market_watch_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        
-        # Create tab widget for Market Watch tabs
-        mw_tabs = QTabWidget()
-        
-        # Symbols tab
-        self.symbols_table = QTableWidget(0, 3)
-        self.symbols_table.setHorizontalHeaderLabels(["Symbol", "Bid", "Ask"])
-        self.symbols_table.horizontalHeader().setStretchLastSection(True)
-        self.symbols_table.setAlternatingRowColors(True)
-        self.symbols_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.symbols_table.setEditTriggers(QTableWidget.NoEditTriggers)  # Disable editing
-        self.symbols_table.doubleClicked.connect(self._on_symbol_double_click)
-        
-        mw_tabs.addTab(self.symbols_table, "Symbols")
-        mw_tabs.addTab(QLabel("Details view"), "Details")
-        mw_tabs.addTab(QLabel("Trading view"), "Trading")
-        mw_tabs.addTab(QLabel("Ticks view"), "Ticks")
-        
-        self.market_watch_dock.setWidget(mw_tabs)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.market_watch_dock)
-    
-    def _create_navigator(self):
-        """Create Navigator dock."""
-        self.navigator_dock = QDockWidget("Navigator", self)
-        self.navigator_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        
-        # Create tree widget
-        tree = QTreeWidget()
-        tree.setHeaderHidden(True)
-        
-        # Add folders
-        accounts_item = QTreeWidgetItem(tree, ["Accounts"])
-        QTreeWidgetItem(accounts_item, ["Demo Account - 1000000"])
-        
-        indicators_item = QTreeWidgetItem(tree, ["Indicators"])
-        trend_item = QTreeWidgetItem(indicators_item, ["Trend"])
-        QTreeWidgetItem(trend_item, ["Moving Average"])
-        QTreeWidgetItem(trend_item, ["Bollinger Bands"])
-        oscillators_item = QTreeWidgetItem(indicators_item, ["Oscillators"])
-        QTreeWidgetItem(oscillators_item, ["RSI"])
-        QTreeWidgetItem(oscillators_item, ["MACD"])
-        
-        ea_item = QTreeWidgetItem(tree, ["Expert Advisors"])
-        QTreeWidgetItem(ea_item, ["Sample EA"])
-        
-        scripts_item = QTreeWidgetItem(tree, ["Scripts"])
-        QTreeWidgetItem(scripts_item, ["Close All"])
-        
-        examples_item = QTreeWidgetItem(tree, ["Examples"])
-        
-        # Expand all
-        tree.expandAll()
-        
-        self.navigator_dock.setWidget(tree)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.navigator_dock)
-    
-    def _create_terminal(self):
-        """Create Terminal dock with tabs."""
-        self.terminal_dock = QDockWidget("Terminal", self)
-        self.terminal_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
-        
-        # Create container widget
-        terminal_widget = QWidget()
-        terminal_layout = QVBoxLayout(terminal_widget)
-        terminal_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Account info bar
-        self.account_info_bar = self._create_account_info_bar()
-        terminal_layout.addWidget(self.account_info_bar)
-        
-        # Create tab widget for terminal tabs
-        terminal_tabs = QTabWidget()
-        
-        # Trade tab
-        self.trade_table = QTableWidget(0, 9)
-        self.trade_table.setHorizontalHeaderLabels([
-            "Symbol", "Ticket", "Time", "Type", "Volume", "Price", "S/L", "T/P", "Profit"
-        ])
-        self.trade_table.horizontalHeader().setStretchLastSection(True)
-        self.trade_table.setAlternatingRowColors(True)
-        terminal_tabs.addTab(self.trade_table, "Trade")
-        
-        # History tab
-        self.history_table = QTableWidget(0, 10)
-        self.history_table.setHorizontalHeaderLabels([
-            "Symbol", "Ticket", "Time", "Type", "Volume", "Price", "S/L", "T/P", "Close Price", "Profit"
-        ])
-        self.history_table.horizontalHeader().setStretchLastSection(True)
-        self.history_table.setAlternatingRowColors(True)
-        terminal_tabs.addTab(self.history_table, "History")
-        
-        # News tab
-        news_widget = QLabel("Market News Feed\n\nFed Holds Interest Rates Steady - Reuters\nECB Signals Potential Rate Cut - Bloomberg\n...")
-        news_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        news_widget.setWordWrap(True)
-        terminal_tabs.addTab(news_widget, "News")
-        
-        # Calendar tab
-        calendar_widget = QLabel("Economic Calendar\n\n2025-11-30 14:30 USD Non-Farm Payrolls (High Impact)\n...")
-        calendar_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        calendar_widget.setWordWrap(True)
-        terminal_tabs.addTab(calendar_widget, "Calendar")
-        
-        # Alerts tab
-        alerts_widget = QLabel("Price Alerts\n\nNo active alerts")
-        alerts_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        terminal_tabs.addTab(alerts_widget, "Alerts")
-        
-        # Journal tab
-        journal_widget = QLabel("System Journal\n\n[INFO] Application started\n[INFO] Connected to Demo Server\n...")
-        journal_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        journal_widget.setWordWrap(True)
-        journal_widget.setStyleSheet("font-family: monospace;")
-        terminal_tabs.addTab(journal_widget, "Journal")
-        
-        # Order Book tab
-        self.order_book_tab = self._create_order_book_tab()
-        terminal_tabs.addTab(self.order_book_tab, "Order Book")
-        
-        # Connect tab change to auto-refresh
-        terminal_tabs.currentChanged.connect(self._on_terminal_tab_changed)
-        self.terminal_tabs = terminal_tabs
-        
-        terminal_layout.addWidget(terminal_tabs)
-        
-        self.terminal_dock.setWidget(terminal_widget)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
-
-    def _create_order_book_tab(self):
-        """Create Order Book tab widget."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Toolbar
-        toolbar = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setIcon(QIcon.fromTheme("view-refresh"))
-        refresh_btn.clicked.connect(self._refresh_order_book)
-        toolbar.addWidget(refresh_btn)
-        toolbar.addStretch()
-        layout.addLayout(toolbar)
-        
-        # Table
-        self.order_book_table = QTableWidget(0, 11)
-        self.order_book_table.setHorizontalHeaderLabels([
-            "Ticket", "Symbol", "Type", "Status", "Volume", "Price", 
-            "Trigger", "Time", "Rejection Reason", "Comment", "Exchange ID"
-        ])
-        self.order_book_table.horizontalHeader().setStretchLastSection(True)
-        self.order_book_table.setAlternatingRowColors(True)
-        self.order_book_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        layout.addWidget(self.order_book_table)
-        
-        return widget
-
-    def _on_terminal_tab_changed(self, index):
-        """Handle terminal tab change."""
-        tab_text = self.terminal_tabs.tabText(index)
-        if tab_text == "Order Book":
-            self._refresh_order_book()
-
-    def _refresh_order_book(self):
-        """Refresh order book data."""
-        if not hasattr(self, 'order_book_worker'):
-            self.order_book_worker = OrderBookWorker(self.broker)
-            self.order_book_worker.data_received.connect(self._update_order_book_table)
-            self.order_book_worker.error_occurred.connect(
-                lambda err: self.status_bar.showMessage(f"Order Book Error: {err}", 5000)
-            )
-        
-        if not self.order_book_worker.isRunning():
-            self.status_bar.showMessage("Refreshing Order Book...", 2000)
-            self.order_book_worker.start()
-
-    def _update_order_book_table(self, orders):
-        """Update Order Book table with data."""
-        self.order_book_table.setRowCount(len(orders))
-        
-        for row, order in enumerate(orders):
-            # Ticket
-            self.order_book_table.setItem(row, 0, QTableWidgetItem(str(order.ticket)))
-            
-            # Symbol
-            self.order_book_table.setItem(row, 1, QTableWidgetItem(order.symbol))
-            
-            # Type
-            type_item = QTableWidgetItem(order.order_type.value)
-            if "buy" in order.order_type.value.lower():
-                type_item.setForeground(QColor("#4caf50"))
-            else:
-                type_item.setForeground(QColor("#f44336"))
-            self.order_book_table.setItem(row, 2, type_item)
-            
-            # Status
-            status_item = QTableWidgetItem(order.status.value.upper())
-            if order.status.value == "active":
-                status_item.setForeground(QColor("#2196f3"))
-            elif order.status.value == "filled":
-                status_item.setForeground(QColor("#4caf50"))
-            elif order.status.value == "rejected":
-                status_item.setForeground(QColor("#f44336"))
-            self.order_book_table.setItem(row, 3, status_item)
-            
-            # Volume
-            self.order_book_table.setItem(row, 4, QTableWidgetItem(str(order.volume)))
-            
-            # Price
-            self.order_book_table.setItem(row, 5, QTableWidgetItem(f"{order.open_price:.2f}"))
-            
-            # Trigger Price (placeholder if not in model yet)
-            self.order_book_table.setItem(row, 6, QTableWidgetItem(""))
-            
-            # Time
-            time_str = order.open_time.strftime("%H:%M:%S") if order.open_time else ""
-            self.order_book_table.setItem(row, 7, QTableWidgetItem(time_str))
-            
-            # Rejection Reason
-            self.order_book_table.setItem(row, 8, QTableWidgetItem(order.rejection_reason))
-            
-            # Comment
-            self.order_book_table.setItem(row, 9, QTableWidgetItem(order.comment))
-            
-            # Exchange ID (placeholder)
-            self.order_book_table.setItem(row, 10, QTableWidgetItem(""))
-            
-        self.status_bar.showMessage(f"Order Book updated: {len(orders)} orders", 3000)
-    
-    def _create_account_info_bar(self):
-        """Create account information bar."""
-        bar = QWidget()
-        bar.setStyleSheet("background-color: #2d2d2d; padding: 5px;")
-        bar.setMaximumHeight(35)
-        
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 2, 10, 2)
-        
-        self.balance_label = QLabel("Balance: 10,000.00 USD")
-        self.balance_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self.balance_label)
-        
-        self.equity_label = QLabel("Equity: 10,000.00")
-        layout.addWidget(self.equity_label)
-        
-        self.margin_label = QLabel("Margin: 0.00")
-        layout.addWidget(self.margin_label)
-        
-        self.free_margin_label = QLabel("Free Margin: 10,000.00")
-        layout.addWidget(self.free_margin_label)
-        
-        self.margin_level_label = QLabel("Margin Level: 0.00 %")
-        layout.addWidget(self.margin_level_label)
-        
-        layout.addStretch()
-        
-        return bar
-    
-    def _create_status_bar(self):
-        """Create status bar."""
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        
-        self.connection_label = QLabel("Not Connected")
-        self.connection_label.setStyleSheet("color: #f44336; font-weight: bold;")
-        self.status_bar.addPermanentWidget(self.connection_label)
-        
-        self.time_label = QLabel("00:00:00")
-        self.status_bar.addPermanentWidget(self.time_label)
-        
-        self.status_bar.showMessage("Ready", 3000)
-    
     def _apply_stylesheet(self):
         """Apply dark theme stylesheet."""
         if os.path.exists("resources/styles.qss"):
@@ -568,12 +299,6 @@ class MainWindow(QMainWindow):
         self.quote_worker.update_failed.connect(lambda err: logger.error(f"Quote worker error: {err}"))
         self.quote_worker.start()
         
-        # TEST: Auto-fetch chart data for first symbol
-        if symbols:
-            QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[0]))
-            QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[1]))
-            QTimer.singleShot(2000, lambda: self._fetch_chart_data(symbols[2]))
-        
         # Start time timer only (market data handled by worker)
         self._setup_timers()
     
@@ -593,32 +318,13 @@ class MainWindow(QMainWindow):
     @pyqtSlot(list)
     def _on_quotes_updated(self, quotes: list):
         """Handle batch quote updates from worker."""
-        self.symbols_table.setRowCount(len(quotes))
-        
-        for row, symbol in enumerate(quotes):
-            # Symbol name with color indicator
-            symbol_item = QTableWidgetItem(f"● {symbol.name}")
-            symbol_item.setForeground(QColor("#4caf50") if symbol.trend == "up" else QColor("#f44336"))
-            self.symbols_table.setItem(row, 0, symbol_item)
-            
-            # Bid price
-            bid_item = QTableWidgetItem(f"{symbol.bid:.5f}")
-            bid_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.symbols_table.setItem(row, 1, bid_item)
-            
-            # Ask price
-            ask_item = QTableWidgetItem(f"{symbol.ask:.5f}")
-            ask_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.symbols_table.setItem(row, 2, ask_item)
+        self.market_watch.update_quotes(quotes)
 
     def _fetch_chart_data(self, symbol_name):
         """
         Fetch chart data for a symbol.
         Triggered by double click on symbol table.
         """
-        from utils.worker_threads import HistoricalDataWorker
-        from datetime import timedelta
-        
         try:
             logger.info(f"Opening chart for {symbol_name}")
             
@@ -704,105 +410,107 @@ class MainWindow(QMainWindow):
     def _on_order_placed(self, order: Order):
         """Handle new order."""
         logger.info(f"Order placed: {order.ticket}")
-        self._update_trade_table()
+        self.terminal.update_trade_table()
         self.status_bar.showMessage(f"Order {order.ticket} placed successfully", 3000)
     
     @pyqtSlot(Order)
     def _on_order_closed(self, order: Order):
         """Handle order closed."""
         logger.info(f"Order closed: {order.ticket}")
-        self._update_trade_table()
-        self._update_history_table()
+        self.terminal.update_trade_table()
+        self.terminal.update_history_table()
         self.status_bar.showMessage(f"Order {order.ticket} closed", 3000)
     
     @pyqtSlot(dict)
     def _on_account_updated(self, account_info: dict):
         """Handle account info update."""
-        self.balance_label.setText(f"Balance: {account_info['balance']:,.2f} USD")
-        self.equity_label.setText(f"Equity: {account_info['equity']:,.2f}")
-        self.margin_label.setText(f"Margin: {account_info['margin']:,.2f}")
-        self.free_margin_label.setText(f"Free Margin: {account_info['free_margin']:,.2f}")
-        self.margin_level_label.setText(f"Margin Level: {account_info['margin_level']:.2f} %")
+        self.terminal.update_account_info(account_info)
+    
+    def _create_navigator(self):
+        """Create Navigator dock."""
+        self.navigator_dock = QDockWidget("Navigator", self)
+        self.navigator_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         
-        # Color code margin level
-        if account_info['margin_level'] < 100 and account_info['margin'] > 0:
-            self.margin_level_label.setStyleSheet("color: #f44336; font-weight: bold;")
+        # Create tree widget
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+        
+        # Add folders
+        accounts_item = QTreeWidgetItem(tree, ["Accounts"])
+        QTreeWidgetItem(accounts_item, ["Demo Account - 1000000"])
+        
+        indicators_item = QTreeWidgetItem(tree, ["Indicators"])
+        trend_item = QTreeWidgetItem(indicators_item, ["Trend"])
+        QTreeWidgetItem(trend_item, ["Moving Average"])
+        QTreeWidgetItem(trend_item, ["Bollinger Bands"])
+        oscillators_item = QTreeWidgetItem(indicators_item, ["Oscillators"])
+        QTreeWidgetItem(oscillators_item, ["RSI"])
+        QTreeWidgetItem(oscillators_item, ["MACD"])
+        
+        ea_item = QTreeWidgetItem(tree, ["Expert Advisors"])
+        QTreeWidgetItem(ea_item, ["Sample EA"])
+        
+        scripts_item = QTreeWidgetItem(tree, ["Scripts"])
+        QTreeWidgetItem(scripts_item, ["Close All"])
+        
+        examples_item = QTreeWidgetItem(tree, ["Examples"])
+        
+        # Expand all
+        tree.expandAll()
+        
+        self.navigator_dock.setWidget(tree)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.navigator_dock)
+
+    def _create_status_bar(self):
+        """Create status bar."""
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        
+        self.connection_label = QLabel("Not Connected")
+        self.connection_label.setStyleSheet("color: #f44336; font-weight: bold;")
+        self.status_bar.addPermanentWidget(self.connection_label)
+        
+        self.time_label = QLabel("00:00:00")
+        self.status_bar.addPermanentWidget(self.time_label)
+        
+        self.status_bar.showMessage("Ready", 3000)
+
+    def _apply_stylesheet(self):
+        """Apply dark theme stylesheet."""
+        if os.path.exists("resources/styles.qss"):
+            with open("resources/styles.qss", "r") as f:
+                self.setStyleSheet(f.read())
+            logger.info("Stylesheet applied")
         else:
-            self.margin_level_label.setStyleSheet("")
+            logger.warning("Stylesheet file not found")
     
-    def _update_market_watch(self):
-        """Update Market Watch table."""
-        symbols = self.broker.get_symbols()
-        self.symbols_table.setRowCount(len(symbols))
-        
-        for row, symbol_name in enumerate(symbols):
-            symbol = self.broker.get_symbol_info(symbol_name)
-            if not symbol:
-                continue
-            
-            # Symbol name with color indicator
-            symbol_item = QTableWidgetItem(f"● {symbol.name}")
-            symbol_item.setForeground(QColor("#4caf50") if symbol.trend == "up" else QColor("#f44336"))
-            self.symbols_table.setItem(row, 0, symbol_item)
-            
-            # Bid price
-            bid_item = QTableWidgetItem(f"{symbol.bid:.5f}")
-            bid_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.symbols_table.setItem(row, 1, bid_item)
-            
-            # Ask price
-            ask_item = QTableWidgetItem(f"{symbol.ask:.5f}")
-            ask_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.symbols_table.setItem(row, 2, ask_item)
     
-    def _update_trade_table(self):
-        """Update Trade (open positions) table."""
-        orders = self.broker.get_open_orders()
-        self.trade_table.setRowCount(len(orders))
+    def _connect_broker(self):
+        """Connect to broker asynchronously."""
+        # Connect event handlers
+        event_bus.tick_received.connect(self._on_tick_received)
+        event_bus.order_placed.connect(self._on_order_placed)
+        event_bus.order_closed.connect(self._on_order_closed)
+        event_bus.account_updated.connect(self._on_account_updated)
         
-        for row, order in enumerate(orders):
-            symbol_info = self.broker.get_symbol_info(order.symbol)
-            current_price = symbol_info.bid if symbol_info else order.open_price
-            profit = order.calculate_profit(current_price)
-            
-            self.trade_table.setItem(row, 0, QTableWidgetItem(order.symbol))
-            self.trade_table.setItem(row, 1, QTableWidgetItem(str(order.ticket)))
-            self.trade_table.setItem(row, 2, QTableWidgetItem(order.open_time.strftime("%Y.%m.%d %H:%M")))
-            self.trade_table.setItem(row, 3, QTableWidgetItem(order.order_type.value))
-            self.trade_table.setItem(row, 4, QTableWidgetItem(f"{order.volume:.2f}"))
-            self.trade_table.setItem(row, 5, QTableWidgetItem(f"{order.open_price:.5f}"))
-            self.trade_table.setItem(row, 6, QTableWidgetItem(f"{order.sl:.5f}" if order.sl > 0 else "0.00000"))
-            self.trade_table.setItem(row, 7, QTableWidgetItem(f"{order.tp:.5f}" if order.tp > 0 else "0.00000"))
-            
-            # Profit with color
-            profit_item = QTableWidgetItem(f"{profit:.2f}")
-            profit_item.setForeground(QColor("#4caf50") if profit >= 0 else QColor("#f44336"))
-            profit_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.trade_table.setItem(row, 8, profit_item)
+        # Create worker thread for connection
+        self.connection_worker = BrokerConnectionWorker(
+            self.broker, "Demo Server", "demo_user", "password"
+        )
+        
+        # Connect worker signals
+        self.connection_worker.progress_update.connect(self._on_connection_progress)
+        self.connection_worker.connection_success.connect(self._on_connection_success)
+        self.connection_worker.connection_failed.connect(self._on_connection_failed)
+        
+        # Start connection in background
+        self.connection_worker.start()
     
-    def _update_history_table(self):
-        """Update History (closed trades) table."""
-        orders = self.broker.get_order_history()
-        self.history_table.setRowCount(len(orders))
-        
-        for row, order in enumerate(orders[-50:]):  # Show last 50
-            profit = order.calculate_profit(order.close_price or order.open_price)
-            
-            self.history_table.setItem(row, 0, QTableWidgetItem(order.symbol))
-            self.history_table.setItem(row, 1, QTableWidgetItem(str(order.ticket)))
-            self.history_table.setItem(row, 2, QTableWidgetItem(order.open_time.strftime("%Y.%m.%d %H:%M")))
-            self.history_table.setItem(row, 3, QTableWidgetItem(order.order_type.value))
-            self.history_table.setItem(row, 4, QTableWidgetItem(f"{order.volume:.2f}"))
-            self.history_table.setItem(row, 5, QTableWidgetItem(f"{order.open_price:.5f}"))
-            self.history_table.setItem(row, 6, QTableWidgetItem(f"{order.sl:.5f}" if order.sl > 0 else "0.00000"))
-            self.history_table.setItem(row, 7, QTableWidgetItem(f"{order.tp:.5f}" if order.tp > 0 else "0.00000"))
-            self.history_table.setItem(row, 8, QTableWidgetItem(f"{order.close_price:.5f}" if order.close_price else ""))
-            
-            # Profit with color
-            profit_item = QTableWidgetItem(f"{profit:.2f}")
-            profit_item.setForeground(QColor("#4caf50") if profit >= 0 else QColor("#f44336"))
-            profit_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.history_table.setItem(row, 9, profit_item)
+    def _on_connection_progress(self, message):
+        """Handle connection progress updates."""
+        logger.info(message)
+        self.status_bar.showMessage(message)
+
     
     def _update_time(self):
         """Update status bar time."""
