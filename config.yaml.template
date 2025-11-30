@@ -1,0 +1,93 @@
+app:
+  name: "MT5 Trading Platform"
+  version: "1.0.0"
+  theme: "dark"
+
+broker:
+  type: "dummy"  # Options: "dummy" or "shoonya"
+  server: "Demo Server"
+  timeout: 30
+
+# Shoonya/Finvasia Broker Configuration
+# Get your credentials from: https://prism.shoonya.com
+# Copy this file to config.yaml and fill in your details
+shoonya:
+  # Authentication credentials
+  auth:
+    user_id: ""           # Your Shoonya user ID (e.g., "FA12345")
+    password: ""          # Your Shoonya password
+    vendor_code: ""       # API vendor code from Shoonya
+    api_key: ""           # API key from Shoonya
+    
+    # TOTP Configuration (recommended for automation)
+    totp_enabled: false   # Set to true if you have TOTP configured
+    totp_key: ""          # TOTP secret key in base32 format
+    
+    # Device identifier
+    imei: "auto"          # Leave as "auto" or provide unique device ID
+  
+  # API Configuration
+  api:
+    base_url: "https://api.shoonya.com/NorenWClientTP/"
+    ws_url: "wss://api.shoonya.com/NorenWSTP/"
+    timeout: 30
+    rate_limit: 10        # Max requests per second
+  
+  # Symbol Master Configuration
+  symbols:
+    cache_directory: "cache/symbols"
+    refresh_interval_hours: 24
+    exchanges:
+      - "NSE"             # National Stock Exchange
+      - "BSE"             # Bombay Stock Exchange
+  
+  # Order Configuration
+  orders:
+    default_product: "I"  # I=Intraday, C=Delivery, H=Cover, B=Bracket
+    default_retention: "DAY"
+    validate_before_place: true
+  
+  # WebSocket Configuration
+  websocket:
+    auto_reconnect: true
+    ping_interval: 30
+    max_subscriptions: 100
+
+chart:
+  default_symbol: "EURUSD"
+  default_timeframe: "H1"
+  candle_count: 200
+  update_interval: 1000  # milliseconds
+
+market_watch:
+  symbols:
+    - "EURUSD"
+    - "GBPUSD"
+    - "USDJPY"
+    - "USDCHF"
+    - "AUDUSD"
+    - "USDCAD"
+    - "EURJPY"
+    - "EURGBP"
+
+account:
+  initial_balance: 10000.0
+  currency: "USD"
+  leverage: 100
+
+trading:
+  default_lot_size: 0.1
+  max_lot_size: 10.0
+  min_lot_size: 0.01
+  one_click_enabled: true
+
+plugins:
+  indicators_path: "plugins/indicators"
+  expert_advisors_path: "plugins/expert_advisors"
+  scripts_path: "plugins/scripts"
+
+logging:
+  level: "INFO"
+  file: "trading_app.log"
+  max_size: 10485760  # 10MB
+  backup_count: 5
