@@ -99,9 +99,9 @@ class ShoonyaSymbolManager:
             ]
         elif exchange == 'BSE':
             return [
-                {'symbol': 'RELIANCE', 'name': 'Reliance Industries', 'exchange': 'BSE'},
-                {'symbol': 'TCS', 'name': 'Tata Consultancy Services', 'exchange': 'BSE'},
-                {'symbol': 'INFY', 'name': 'Infosys', 'exchange': 'BSE'},
+                {'symbol': 'RELIANCE-EQ', 'name': 'Reliance Industries', 'exchange': 'BSE'},
+                {'symbol': 'TCS-EQ', 'name': 'Tata Consultancy Services', 'exchange': 'BSE'},
+                {'symbol': 'INFY-EQ', 'name': 'Infosys', 'exchange': 'BSE'},
             ]
         return []
     

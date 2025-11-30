@@ -22,7 +22,7 @@ from core.feed_manager import feed_manager
 from brokers.factory import broker_factory
 from brokers.registry import register_builtin_brokers
 from data.models import Symbol, Order
-from utils.worker_threads import BrokerConnectionWorker
+from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker
 
 
 class MainWindow(QMainWindow):
@@ -115,6 +115,12 @@ class MainWindow(QMainWindow):
         tools_menu = menubar.addMenu("Tools")
         tools_menu.addAction("Options")
         tools_menu.addAction("MetaQuotes Language Editor")
+        tools_menu.addSeparator()
+        
+        clear_cache_action = QAction("Clear Cache", self)
+        clear_cache_action.setStatusTip("Clear application cache and temporary files")
+        clear_cache_action.triggered.connect(self._on_clear_cache)
+        tools_menu.addAction(clear_cache_action)
         
         # Window menu
         window_menu = menubar.addMenu("Window")
@@ -398,6 +404,7 @@ class MainWindow(QMainWindow):
         else:
             logger.warning("Stylesheet file not found")
     
+    
     def _connect_broker(self):
         """Connect to broker asynchronously."""
         # Connect event handlers
@@ -431,14 +438,14 @@ class MainWindow(QMainWindow):
         self.connection_label.setText(f"Connected: {username}")
         self.connection_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         
-        # Subscribe to symbols
-        for symbol in self.broker.get_symbols():
-            self.broker.subscribe(symbol)
+        # Start market data worker
+        symbols = self.broker.get_symbols()
+        self.quote_worker = QuoteUpdateWorker(self.broker, symbols)
+        self.quote_worker.quotes_updated.connect(self._on_quotes_updated)
+        self.quote_worker.update_failed.connect(lambda err: logger.error(f"Quote worker error: {err}"))
+        self.quote_worker.start()
         
-        # Initial update
-        self._update_market_watch()
-        
-        # Start timers
+        # Start time timer only (market data handled by worker)
         self._setup_timers()
     
     def _on_connection_failed(self, error):
@@ -449,15 +456,31 @@ class MainWindow(QMainWindow):
     
     def _setup_timers(self):
         """Setup update timers."""
-        # Market watch update timer
-        self.mw_timer = QTimer(self)
-        self.mw_timer.timeout.connect(self._update_market_watch)
-        self.mw_timer.start(1000)  # Update every second
-        
         # Time update timer
         self.time_timer = QTimer(self)
         self.time_timer.timeout.connect(self._update_time)
         self.time_timer.start(1000)
+
+    @pyqtSlot(list)
+    def _on_quotes_updated(self, quotes: list):
+        """Handle batch quote updates from worker."""
+        self.symbols_table.setRowCount(len(quotes))
+        
+        for row, symbol in enumerate(quotes):
+            # Symbol name with color indicator
+            symbol_item = QTableWidgetItem(f"● {symbol.name}")
+            symbol_item.setForeground(QColor("#4caf50") if symbol.trend == "up" else QColor("#f44336"))
+            self.symbols_table.setItem(row, 0, symbol_item)
+            
+            # Bid price
+            bid_item = QTableWidgetItem(f"{symbol.bid:.5f}")
+            bid_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.symbols_table.setItem(row, 1, bid_item)
+            
+            # Ask price
+            ask_item = QTableWidgetItem(f"{symbol.ask:.5f}")
+            ask_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.symbols_table.setItem(row, 2, ask_item)
 
     @pyqtSlot(Symbol)
     def _on_tick_received(self, symbol: Symbol):
@@ -607,6 +630,33 @@ class MainWindow(QMainWindow):
         """Show new order dialog."""
         QMessageBox.information(self, "New Order", "New Order dialog - to be implemented")
     
+    def _on_clear_cache(self):
+        """Handle clear cache action."""
+        from utils.cache_manager import clear_cache
+        
+        reply = QMessageBox.question(
+            self, 
+            "Clear Cache", 
+            "Are you sure you want to clear the application cache?\n"
+            "This will delete temporary files and may require a restart.",
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                count = clear_cache(os.getcwd())
+                QMessageBox.information(
+                    self, 
+                    "Cache Cleared", 
+                    f"Successfully cleared {count} cache items.\n"
+                    "Please restart the application for changes to take full effect."
+                )
+                logger.info(f"User cleared cache: {count} items deleted")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to clear cache: {str(e)}")
+                logger.error(f"Failed to clear cache: {e}")
+
     def closeEvent(self, event):
         """Handle application close."""
         logger.info("Application closing...")
