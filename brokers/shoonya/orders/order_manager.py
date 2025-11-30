@@ -25,6 +25,7 @@ class ShoonyaOrderManager:
         price: Optional[float] = None,
         exchange: str = 'NSE',
         product: str = 'I',  # I=Intraday, C=Delivery
+        trigger_price: Optional[float] = None,
         **kwargs
     ) -> Optional[Order]:
         """
@@ -37,6 +38,7 @@ class ShoonyaOrderManager:
             price: Limit price (None for market order)
             exchange: Exchange
             product: Product type (I/C/H/B)
+            trigger_price: Trigger price for SL/SL-M
             
         Returns:
             Order object or None
@@ -48,12 +50,19 @@ class ShoonyaOrderManager:
         
         try:
             # Determine price type
-            if price is None:
+            if price is None or price == 0:
                 price_type = 'MKT'
                 order_price = '0'
             else:
                 price_type = 'LMT'
                 order_price = str(price)
+            
+            # If trigger price is present, it might be SL-L or SL-M
+            if trigger_price and trigger_price > 0:
+                if price_type == 'MKT':
+                    price_type = 'SL-MKT'
+                else:
+                    price_type = 'SL-LMT'
             
             # Determine buy/sell
             buy_or_sell = 'B' if order_type == OrderType.BUY else 'S'
@@ -70,7 +79,7 @@ class ShoonyaOrderManager:
                 discloseqty=0,
                 price_type=price_type,
                 price=order_price,
-                trigger_price=None,
+                trigger_price=str(trigger_price) if trigger_price else None,
                 retention='DAY',
                 remarks=kwargs.get('comment', '')
             )
@@ -93,11 +102,11 @@ class ShoonyaOrderManager:
                 )
                 
                 self.open_orders.append(order)
-                logger.info(f"✅ Order placed: {order_no}")
+                logger.info(f"Order placed: {order_no}")
                 return order
             else:
                 error_msg = result.get('emsg', 'Unknown error') if result else 'No response'
-                logger.error(f"❌ Order failed: {error_msg}")
+                logger.error(f"Order failed: {error_msg}")
                 return None
                 
         except Exception as e:
@@ -124,6 +133,68 @@ class ShoonyaOrderManager:
                 
         except Exception as e:
             logger.error(f"Cancel order error: {e}")
+            return False
+
+    def modify_order(
+        self,
+        ticket: int,
+        symbol: str,
+        order_type: OrderType,
+        volume: float,
+        price: float = 0.0,
+        trigger_price: float = 0.0,
+        exchange: str = 'NSE'
+    ) -> bool:
+        """
+        Modify an existing order.
+        
+        Args:
+            ticket: Order ticket number
+            symbol: Trading symbol
+            order_type: Order type (used to determine price type)
+            volume: New quantity
+            price: New price
+            trigger_price: New trigger price
+            exchange: Exchange
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        api = self.auth_manager.get_api()
+        if not api:
+            return False
+            
+        try:
+            # Determine price type
+            if price == 0 and trigger_price == 0:
+                price_type = 'MKT'
+            elif trigger_price > 0:
+                price_type = 'SL-MKT' if price == 0 else 'SL-LMT'
+            else:
+                price_type = 'LMT'
+                
+            logger.info(f"Modifying order {ticket}: {volume} {symbol} @ {price_type}")
+            
+            result = api.modify_order(
+                exchange=exchange,
+                tradingsymbol=symbol,
+                orderno=str(ticket),
+                newquantity=int(volume),
+                newprice_type=price_type,
+                newprice=str(price) if price > 0 else '0',
+                newtrigger_price=str(trigger_price) if trigger_price > 0 else None
+            )
+            
+            if result and result.get('stat') == 'Ok':
+                logger.info(f"Order {ticket} modified successfully")
+                return True
+            else:
+                error_msg = result.get('emsg', 'Unknown error') if result else 'No response'
+                logger.error(f"Failed to modify order {ticket}: {error_msg}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Modify order error: {e}")
             return False
     
     def get_order_book(self) -> List[Order]:

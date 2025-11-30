@@ -21,12 +21,14 @@ from core.event_bus import event_bus
 from core.feed_manager import feed_manager
 from brokers.factory import broker_factory
 from brokers.registry import register_builtin_brokers
+
 from data.models import Symbol, Order
 from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker, HistoricalDataWorker
 
 # UI Modules
 from ui.market_watch import MarketWatch
 from ui.terminal import Terminal
+from ui.order_dialog import OrderDialog
 
 
 class MainWindow(QMainWindow):
@@ -72,6 +74,7 @@ class MainWindow(QMainWindow):
         # Create Market Watch dock (left)
         self.market_watch = MarketWatch(self)
         self.market_watch.symbol_double_clicked.connect(self._fetch_chart_data)
+        self.market_watch.symbol_added.connect(self._on_symbol_added)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.market_watch)
         
         # Create Navigator dock (left, below market watch)
@@ -156,8 +159,9 @@ class MainWindow(QMainWindow):
         # Timeframe buttons
         for tf in ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]:
             btn = QPushButton(tf)
-            btn.setFixedWidth(35)
+            btn.setFixedWidth(55)
             btn.setToolTip(f"Switch to {tf} timeframe")
+            btn.clicked.connect(lambda checked, t=tf: self._change_timeframe(t))
             toolbar.addWidget(btn)
         
         toolbar.addSeparator()
@@ -293,11 +297,25 @@ class MainWindow(QMainWindow):
         self.connection_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         
         # Start market data worker
-        symbols = self.broker.get_symbols()
-        self.quote_worker = QuoteUpdateWorker(self.broker, symbols)
-        self.quote_worker.quotes_updated.connect(self._on_quotes_updated)
-        self.quote_worker.update_failed.connect(lambda err: logger.error(f"Quote worker error: {err}"))
-        self.quote_worker.start()
+        # symbols = self.broker.get_symbols()
+        # self.quote_worker = QuoteUpdateWorker(self.broker, symbols)
+        # self.quote_worker.quotes_updated.connect(self._on_quotes_updated)
+        # self.quote_worker.update_failed.connect(lambda err: logger.error(f"Quote worker error: {err}"))
+        # self.quote_worker.start()
+        
+        # Subscribe to default symbols for testing
+        # In production, this would be loaded from config or last session
+        test_symbols = ["NSE|22", "NSE|26000", "NSE|26009", "BSE|500325"] # ACC, Nifty 50, Bank Nifty, Reliance
+        self.broker.subscribe(test_symbols)
+        
+        # Setup autocomplete for Market Watch
+        if hasattr(self.broker, 'symbol_manager'):
+            # Ensure symbols are loaded (might need to download if not cached)
+            # For now, we rely on what's in cache/hardcoded
+            self.broker.symbol_manager.download_symbol_masters()
+            all_symbols = self.broker.symbol_manager.get_all_symbols()
+            self.market_watch.set_search_completer(all_symbols)
+            logger.info(f"Loaded {len(all_symbols)} symbols for autocomplete")
         
         # Start time timer only (market data handled by worker)
         self._setup_timers()
@@ -320,13 +338,13 @@ class MainWindow(QMainWindow):
         """Handle batch quote updates from worker."""
         self.market_watch.update_quotes(quotes)
 
-    def _fetch_chart_data(self, symbol_name):
+    def _fetch_chart_data(self, symbol_name, timeframe="M5"):
         """
         Fetch chart data for a symbol.
-        Triggered by double click on symbol table.
+        Triggered by double click on symbol table or timeframe change.
         """
         try:
-            logger.info(f"Opening chart for {symbol_name}")
+            logger.info(f"Opening chart for {symbol_name} ({timeframe})")
             
             # 1. Check if tab already exists
             tab_index = -1
@@ -341,14 +359,14 @@ class MainWindow(QMainWindow):
                 self.chart_tabs.setCurrentIndex(tab_index)
             else:
                 # Tab does not exist, create it
-                chart_container = self._create_chart_widget(f"{symbol_name}.M5")
+                chart_container = self._create_chart_widget(f"{symbol_name}.{timeframe}")
                 self.chart_tabs.addTab(chart_container, symbol_name)
                 self.chart_tabs.setCurrentIndex(self.chart_tabs.count() - 1)
             
             # 3. Fetch data
-            logger.info(f"Requesting chart data for {symbol_name}")
+            logger.info(f"Requesting chart data for {symbol_name} {timeframe}")
             
-            # Example: Fetch last 7 days of M5 data
+            # Example: Fetch last 7 days of data
             end_time = datetime.now()
             start_time = end_time - timedelta(days=7)
             
@@ -362,7 +380,7 @@ class MainWindow(QMainWindow):
             worker = HistoricalDataWorker(
                 self.broker, 
                 symbol_name, 
-                "M5", 
+                timeframe, 
                 start_time, 
                 end_time
             )
@@ -387,6 +405,33 @@ class MainWindow(QMainWindow):
             logger.error(f"Error in _fetch_chart_data: {e}", exc_info=True)
             self.status_bar.showMessage(f"Error opening chart: {e}")
 
+    def _change_timeframe(self, timeframe: str):
+        """
+        Change timeframe for the currently active chart.
+        """
+        try:
+            # Get current tab index
+            current_index = self.chart_tabs.currentIndex()
+            if current_index == -1:
+                return
+                
+            # Get symbol from tab text (assuming tab text is the symbol name)
+            symbol_name = self.chart_tabs.tabText(current_index)
+            
+            logger.info(f"Changing timeframe for {symbol_name} to {timeframe}")
+            
+            # Update chart widget timeframe
+            if hasattr(self, 'charts') and symbol_name in self.charts:
+                chart_widget = self.charts[symbol_name]
+                chart_widget.timeframe = timeframe
+                
+                # Refresh data
+                self._fetch_chart_data(symbol_name, timeframe)
+                
+        except Exception as e:
+            logger.error(f"Error changing timeframe: {e}")
+            self.status_bar.showMessage(f"Error changing timeframe: {e}")
+
     def _on_tab_close(self, index):
         """Handle tab close request."""
         tab_text = self.chart_tabs.tabText(index)
@@ -403,8 +448,8 @@ class MainWindow(QMainWindow):
     @pyqtSlot(Symbol)
     def _on_tick_received(self, symbol: Symbol):
         """Handle tick update."""
-        # Update will happen in bulk via timer
-        pass
+        # Update Market Watch incrementally
+        self.market_watch.update_tick(symbol)
     
     @pyqtSlot(Order)
     def _on_order_placed(self, order: Order):
@@ -527,6 +572,14 @@ class MainWindow(QMainWindow):
             logger.info(f"Opening chart for {symbol}")
             QTimer.singleShot(1000, lambda: self._fetch_chart_data(symbol))
             # In full implementation, would open new chart tab
+            
+    def _on_symbol_added(self, symbol: str):
+        """Handle new symbol added from Market Watch."""
+        logger.info(f"Adding symbol: {symbol}")
+        self.status_bar.showMessage(f"Adding symbol: {symbol}...", 3000)
+        # Subscribe to the symbol
+        # Note: broker.subscribe handles list, so wrap in list
+        self.broker.subscribe([symbol])
     
     def _place_market_order(self, symbol: str, order_type_str: str):
         """Place a market order."""
@@ -548,9 +601,57 @@ class MainWindow(QMainWindow):
             logger.error("Failed to place order")
     
     def _show_new_order_dialog(self):
-        """Show new order dialog."""
-        QMessageBox.information(self, "New Order", "New Order dialog - to be implemented")
-    
+        """Show the new order dialog."""
+        # Get current symbol from active chart or market watch
+        symbol = "NSE|26000" # Default
+        price = 0.0
+        
+        # Try to get from active chart
+        current_index = self.chart_tabs.currentIndex()
+        if current_index != -1:
+            symbol = self.chart_tabs.tabText(current_index)
+        
+        dialog = OrderDialog(symbol, price, self)
+        dialog.order_placed.connect(self._place_order_from_dialog)
+        dialog.exec_()
+        
+    def _place_order_from_dialog(self, order_data):
+        """Handle order placement from dialog."""
+        try:
+            logger.info(f"Placing order: {order_data}")
+            
+            # Map string types to OrderType enum
+            from data.models import OrderType
+            
+            side = order_data['side'] # BUY/SELL
+            o_type = order_data['order_type'] # MARKET, LIMIT, SL-L, SL-M
+            
+            final_order_type = OrderType.BUY
+            
+            if side == "BUY":
+                if o_type == "MARKET": final_order_type = OrderType.BUY
+                elif o_type == "LIMIT": final_order_type = OrderType.BUY_LIMIT
+                elif o_type in ["SL-L", "SL-M"]: final_order_type = OrderType.BUY_STOP
+            else:
+                if o_type == "MARKET": final_order_type = OrderType.SELL
+                elif o_type == "LIMIT": final_order_type = OrderType.SELL_LIMIT
+                elif o_type in ["SL-L", "SL-M"]: final_order_type = OrderType.SELL_STOP
+            
+            self.broker.place_order(
+                symbol=order_data['symbol'],
+                order_type=final_order_type,
+                volume=order_data['quantity'],
+                price=order_data['price'],
+                trigger_price=order_data['trigger_price'],
+                product_type=order_data['product_type']
+            )
+            
+            self.status_bar.showMessage(f"Order placed for {order_data['symbol']}", 5000)
+            
+        except Exception as e:
+            logger.error(f"Error placing order: {e}")
+            QMessageBox.critical(self, "Order Error", f"Failed to place order: {str(e)}")
+
     def _on_clear_cache(self):
         """Handle clear cache action."""
         from utils.cache_manager import clear_cache

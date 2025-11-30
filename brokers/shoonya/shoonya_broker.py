@@ -67,8 +67,13 @@ class ShoonyaBroker(BrokerBase):
                 self.market_data_manager = ShoonyaMarketDataManager(self.auth_manager)
                 self.order_manager = ShoonyaOrderManager(self.auth_manager)
                 
+                # Initialize WebSocket Client
+                from brokers.shoonya.websocket.client import ShoonyaWebSocketClient
+                self.ws_client = ShoonyaWebSocketClient(self.auth_manager.get_api())
+                self.ws_client.connect()
+                
                 logger.info("Downloading symbols...")
-                self.symbol_manager.download_symbol_masters()
+                # self.symbol_manager.download_symbol_masters() # Can be slow, maybe skip or async
                 logger.info("[OK] All managers initialized")
                 
                 event_bus.connected.emit(self.name)
@@ -83,6 +88,9 @@ class ShoonyaBroker(BrokerBase):
     
     def disconnect(self):
         """Disconnect from Shoonya."""
+        if hasattr(self, 'ws_client') and self.ws_client:
+            self.ws_client.disconnect()
+            
         if self.auth_manager:
             self.auth_manager.logout()
         self._connected = False
@@ -100,14 +108,54 @@ class ShoonyaBroker(BrokerBase):
             return self.market_data_manager.get_quote(symbol)
         return None
     
-    def subscribe(self, symbol: str):
-        """Subscribe to symbol updates."""
-        logger.debug(f"Subscribe requested for {symbol} (WebSocket not yet implemented)")
-        pass
+    def subscribe(self, symbols):
+        """
+        Subscribe to symbol updates.
+        
+        Args:
+            symbols: Single symbol string or list of symbol strings
+        """
+        if isinstance(symbols, str):
+            symbols = [symbols]
+            
+        final_symbols = []
+        
+        for symbol in symbols:
+            if "|" in symbol:
+                final_symbols.append(symbol)
+            else:
+                # Try to resolve symbol
+                # Check for exchange prefix (e.g. NSE:SBIN)
+                exchange = 'NSE'
+                clean_symbol = symbol
+                
+                if ':' in symbol:
+                    parts = symbol.split(':')
+                    if len(parts) == 2:
+                        exchange = parts[0]
+                        clean_symbol = parts[1]
+                elif 'BSE' in symbol: # Heuristic
+                    exchange = 'BSE'
+                
+                # Lookup token
+                token = self.market_data_manager.get_token(clean_symbol, exchange)
+                if token:
+                    final_symbols.append(f"{exchange}|{token}")
+                    logger.info(f"Resolved {symbol} to {exchange}|{token}")
+                else:
+                    logger.warning(f"Could not resolve symbol: {symbol}")
+        
+        if final_symbols:
+            if hasattr(self, 'ws_client') and self.ws_client:
+                self.ws_client.subscribe(final_symbols)
+            else:
+                logger.warning("WebSocket client not initialized, cannot subscribe")
     
     def unsubscribe(self, symbol: str):
         """Unsubscribe from symbol."""
-        pass
+        if "|" in symbol:
+            if hasattr(self, 'ws_client') and self.ws_client:
+                self.ws_client.unsubscribe([symbol])
     
     def get_historical_data(
         self,
@@ -134,31 +182,73 @@ class ShoonyaBroker(BrokerBase):
         price: Optional[float] = None,
         sl: float = 0.0,
         tp: float = 0.0,
-        comment: str = ""
+        comment: str = "",
+        trigger_price: Optional[float] = None,
+        product_type: str = 'I'
     ) -> Optional[Order]:
         """Place an order."""
         if self.order_manager:
+            # Parse symbol and exchange
+            exchange = 'NSE' # Default
+            trading_symbol = symbol
+            
+            # Handle EXCHANGE:SYMBOL format
+            if ':' in symbol:
+                parts = symbol.split(':')
+                if len(parts) == 2:
+                    exchange = parts[0]
+                    trading_symbol = parts[1]
+            # Handle EXCHANGE|TOKEN format (less likely for placement but possible)
+            elif '|' in symbol:
+                 parts = symbol.split('|')
+                 if len(parts) == 2:
+                    exchange = parts[0]
+                    trading_symbol = parts[1]
+
             return self.order_manager.place_order(
-                symbol=symbol,
+                symbol=trading_symbol,
                 order_type=order_type,
                 volume=volume,
                 price=price,
                 sl=sl,
                 tp=tp,
-                comment=comment
+                comment=comment,
+                trigger_price=trigger_price,
+                product=product_type,
+                exchange=exchange
             )
         return None
     
-    def modify_order(self, ticket: int, sl: float = 0.0, tp: float = 0.0) -> bool:
-        """Modify order."""
-        # TODO: Implement order modification
+    def modify_order(
+        self,
+        ticket: int,
+        symbol: str,
+        order_type: OrderType,
+        volume: float,
+        price: float = 0.0,
+        trigger_price: float = 0.0
+    ) -> bool:
+        """Modify an existing order."""
+        if self.order_manager:
+            return self.order_manager.modify_order(
+                ticket=ticket,
+                symbol=symbol,
+                order_type=order_type,
+                volume=volume,
+                price=price,
+                trigger_price=trigger_price
+            )
         return False
-    
-    def close_order(self, ticket: int) -> bool:
-        """Close order."""
+
+    def cancel_order(self, ticket: int) -> bool:
+        """Cancel an order."""
         if self.order_manager:
             return self.order_manager.cancel_order(ticket)
         return False
+    
+    def close_order(self, ticket: int) -> bool:
+        """Close order (alias for cancel)."""
+        return self.cancel_order(ticket)
     
     def get_open_orders(self) -> List[Order]:
         """Get open orders."""

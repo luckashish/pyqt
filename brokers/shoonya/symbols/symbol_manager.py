@@ -96,12 +96,26 @@ class ShoonyaSymbolManager:
                 {'symbol': 'ITC-EQ', 'name': 'ITC Ltd', 'exchange': 'NSE'},
                 {'symbol': 'KOTAKBANK-EQ', 'name': 'Kotak Mahindra Bank', 'exchange': 'NSE'},
                 {'symbol': 'LT-EQ', 'name': 'Larsen & Toubro', 'exchange': 'NSE'},
+                {'symbol': 'AXISBANK-EQ', 'name': 'Axis Bank', 'exchange': 'NSE'},
+                {'symbol': 'HINDUNILVR-EQ', 'name': 'Hindustan Unilever', 'exchange': 'NSE'},
+                {'symbol': 'TITAN-EQ', 'name': 'Titan Company', 'exchange': 'NSE'},
+                {'symbol': 'BAJFINANCE-EQ', 'name': 'Bajaj Finance', 'exchange': 'NSE'},
+                {'symbol': 'MARUTI-EQ', 'name': 'Maruti Suzuki', 'exchange': 'NSE'},
+                {'symbol': 'ASIANPAINT-EQ', 'name': 'Asian Paints', 'exchange': 'NSE'},
+                {'symbol': 'TATASTEEL-EQ', 'name': 'Tata Steel', 'exchange': 'NSE'},
+                {'symbol': 'TATAMOTORS-EQ', 'name': 'Tata Motors', 'exchange': 'NSE'},
+                {'symbol': 'SUNPHARMA-EQ', 'name': 'Sun Pharma', 'exchange': 'NSE'},
+                {'symbol': 'WIPRO-EQ', 'name': 'Wipro', 'exchange': 'NSE'},
+                {'symbol': 'NIFTY 50', 'name': 'Nifty 50 Index', 'exchange': 'NSE'},
+                {'symbol': 'NIFTY BANK', 'name': 'Nifty Bank Index', 'exchange': 'NSE'},
             ]
         elif exchange == 'BSE':
             return [
                 {'symbol': 'RELIANCE-EQ', 'name': 'Reliance Industries', 'exchange': 'BSE'},
                 {'symbol': 'TCS-EQ', 'name': 'Tata Consultancy Services', 'exchange': 'BSE'},
                 {'symbol': 'INFY-EQ', 'name': 'Infosys', 'exchange': 'BSE'},
+                {'symbol': 'HDFCBANK-EQ', 'name': 'HDFC Bank', 'exchange': 'BSE'},
+                {'symbol': 'SBIN-EQ', 'name': 'State Bank of India', 'exchange': 'BSE'},
             ]
         return []
     

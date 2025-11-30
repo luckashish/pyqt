@@ -49,6 +49,12 @@ class Symbol:
     name: str
     bid: float = 0.0
     ask: float = 0.0
+    last: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    close: float = 0.0
+    volume: float = 0.0
+    description: str = ""
     last_tick_time: datetime = field(default_factory=datetime.now)
     
     @property

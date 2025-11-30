@@ -16,7 +16,7 @@ class ShoonyaMarketDataManager:
         # Cache symbol tokens to avoid repeated searches
         self.token_cache = {}
     
-    def _get_token(self, symbol: str, exchange: str = 'NSE') -> Optional[str]:
+    def get_token(self, symbol: str, exchange: str = 'NSE') -> Optional[str]:
         """
         Get token for a symbol by searching.
         
@@ -43,18 +43,41 @@ class ShoonyaMarketDataManager:
             if result and result.get('stat') == 'Ok':
                 values = result.get('values', [])
                 
-                # Find exact match
+                # 1. Try exact match
                 for item in values:
                     if item.get('tsym') == symbol:
                         token = item.get('token')
-                        # Cache it
                         self.token_cache[cache_key] = token
-                        logger.debug(f"Found token {token} for {symbol}")
+                        logger.debug(f"Found token {token} for {symbol} (Exact match)")
                         return token
                 
-                # If no exact match but we have results, log it
+                # 2. Try match with -EQ suffix (common for NSE)
+                symbol_eq = f"{symbol}-EQ"
+                for item in values:
+                    if item.get('tsym') == symbol_eq:
+                        token = item.get('token')
+                        self.token_cache[cache_key] = token
+                        logger.debug(f"Found token {token} for {symbol} (Suffix match)")
+                        return token
+
+                # 3. Try match where result starts with symbol (e.g. RELIANCE vs RELIANCE-EQ)
+                for item in values:
+                    tsym = item.get('tsym', '')
+                    if tsym.startswith(symbol) and (tsym == symbol or tsym == f"{symbol}-EQ"):
+                         token = item.get('token')
+                         self.token_cache[cache_key] = token
+                         logger.debug(f"Found token {token} for {symbol} (Prefix match)")
+                         return token
+                
+                # 4. If still no match but we have results, take the first one if it looks reasonable
+                # This is risky but better than failing for simple cases
                 if values:
-                    logger.warning(f"No exact match for {symbol}, found {len(values)} similar symbols")
+                    first_match = values[0]
+                    token = first_match.get('token')
+                    tsym = first_match.get('tsym')
+                    logger.warning(f"No exact match for {symbol}, using first result: {tsym}")
+                    self.token_cache[cache_key] = token
+                    return token
                     
             return None
             
@@ -79,8 +102,13 @@ class ShoonyaMarketDataManager:
             return None
         
         try:
-            # Step 1: Get token for the symbol
-            token = self._get_token(symbol, exchange)
+            # Step 1: Parse exchange and get token
+            if ':' in symbol:
+                exchange, clean_symbol = symbol.split(':', 1)
+            else:
+                clean_symbol = symbol
+                
+            token = self.get_token(clean_symbol, exchange)
             if not token:
                 logger.warning(f"Could not find token for {symbol}")
                 return None
@@ -146,12 +174,17 @@ class ShoonyaMarketDataManager:
             
         try:
             # 1. Get token
-            # Default to NSE, but should ideally come from symbol info or arg
-            exchange = 'NSE' 
-            if 'BSE' in symbol:
-                exchange = 'BSE'
+            # Parse exchange from symbol if present
+            if ':' in symbol:
+                exchange, clean_symbol = symbol.split(':', 1)
+            else:
+                # Fallback logic
+                exchange = 'NSE' 
+                if 'BSE' in symbol:
+                    exchange = 'BSE'
+                clean_symbol = symbol
                 
-            token = self._get_token(symbol, exchange)
+            token = self.get_token(clean_symbol, exchange)
             if not token:
                 logger.warning(f"Could not find token for {symbol}")
                 return []
