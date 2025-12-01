@@ -128,6 +128,7 @@ class ShoonyaWebSocketClient:
         """
         try:
             msg_type = tick_data.get('t')
+            logger.debug(f"WS Message: {tick_data}")
             if msg_type not in ['tk', 'tf']:
                 return
 
@@ -171,7 +172,7 @@ class ShoonyaWebSocketClient:
                 symbol_name = self.token_map[token]
             else:
                 # Fallback: try to construct it or ignore
-                # logger.debug(f"Unknown token {token} in tick")
+                logger.debug(f"Unknown token {token} in tick. Map keys: {list(self.token_map.keys())}")
                 return
 
             # Parse fields

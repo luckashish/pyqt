@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPicture
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class CandlestickItem(pg.GraphicsObject):
     """Custom GraphicsObject for drawing candlesticks."""
@@ -16,6 +16,16 @@ class CandlestickItem(pg.GraphicsObject):
         pg.GraphicsObject.__init__(self)
         self.data = data  # list of (time, open, close, min, max)
         self.generatePicture()
+
+    def update_last_candle(self, index, open, close, low, high):
+        """Update the last candle data and repaint."""
+        if index < 0 or index >= len(self.data):
+            return
+            
+        self.prepareGeometryChange()
+        self.data[index] = (index, open, close, low, high)
+        self.generatePicture()
+        self.update()
 
     def generatePicture(self):
         """Pre-draw the picture for performance."""
@@ -190,6 +200,107 @@ class ChartWidget(QWidget):
         
         # Set title
         self.plot_item.setTitle(f"{self.symbol} ({self.timeframe})")
+
+    def update_tick(self, tick_data):
+        """
+        Update chart with new tick data.
+        tick_data: Symbol object or dict with 'last_price', 'timestamp'
+        """
+        if not self.data:
+            return
+            
+        print(f"Chart update_tick: {tick_data.last}")
+        last_candle = self.data[-1]
+        price = tick_data.last
+        
+        if price <= 0:
+            return
+        
+        # Check if we need a new candle
+        # Simple time check based on timeframe
+        current_time = datetime.now() # Or use tick timestamp if available
+        
+        # Determine timeframe delta
+        delta = None
+        if self.timeframe == "M1":
+            delta = timedelta(minutes=1)
+        elif self.timeframe == "M5":
+            delta = timedelta(minutes=5)
+        elif self.timeframe == "M15":
+            delta = timedelta(minutes=15)
+        elif self.timeframe == "M30":
+            delta = timedelta(minutes=30)
+        elif self.timeframe == "H1":
+            delta = timedelta(hours=1)
+        elif self.timeframe == "D1":
+            delta = timedelta(days=1)
+            
+        if delta:
+            # Check if last candle time + delta <= current time
+            # Note: This is a simplification. Ideally we align to grid (e.g. 10:00, 10:05)
+            # But for now, let's just check if we crossed the boundary
+            
+            # Align current time to timeframe start
+            # e.g. 10:03:45 M5 -> 10:00:00
+            # If last candle is 10:00:00, and now is 10:05:01, we need new candle
+            
+            # Helper to floor time
+            def floor_time(dt, delta):
+                seconds = int((dt - dt.min).total_seconds())
+                step = int(delta.total_seconds())
+                floored_seconds = (seconds // step) * step
+                return dt.min + timedelta(seconds=floored_seconds)
+
+            current_candle_time = floor_time(current_time, delta)
+            
+            if current_candle_time > last_candle.timestamp:
+                # Create new candle
+                from data.models import OHLCData
+                new_candle = OHLCData(
+                    timestamp=current_candle_time,
+                    open=price,
+                    high=price,
+                    low=price,
+                    close=price,
+                    volume=0
+                )
+                self.data.append(new_candle)
+                last_candle = new_candle
+                
+                # We need to add this to the plot item
+                # Since CandlestickItem takes fixed data, we might need to recreate it 
+                # or append to it if we support it.
+                # Our update_last_candle only updates existing.
+                # Let's append to data and trigger full update for now to be safe with X-axis
+                self.update_chart(self.data)
+                return
+
+        # Update last candle
+        last_candle.close = price
+        last_candle.high = max(last_candle.high, price)
+        last_candle.low = min(last_candle.low, price)
+        
+        # Trigger repaint
+        # Ideally we should optimize this to not redraw everything
+        # But for M5/H1, full redraw on tick is okay-ish for now
+        # self.update_chart(self.data)
+        
+        # Optimization: Update the specific candle item
+        if self.candle_item:
+            # Update the last data point in the candle item
+            # self.candle_item.data is list of (t, open, close, min, max)
+            # We need to update the last tuple
+            
+            # Get last index from existing data
+            last_idx = len(self.candle_item.data) - 1
+            if last_idx >= 0:
+                self.candle_item.update_last_candle(
+                    last_idx,
+                    last_candle.open,
+                    last_candle.close,
+                    last_candle.low,
+                    last_candle.high
+                )
 
     def contextMenuEvent(self, event):
         """Show context menu."""

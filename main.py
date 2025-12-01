@@ -454,8 +454,23 @@ class MainWindow(QMainWindow):
     @pyqtSlot(Symbol)
     def _on_tick_received(self, symbol: Symbol):
         """Handle tick update."""
+        logger.debug(f"Tick received: {symbol.name} Last: {symbol.last}")
+        
         # Update Market Watch incrementally
         self.market_watch.update_tick(symbol)
+        
+        # Update Charts
+        if hasattr(self, 'charts'):
+            # Check if we have any charts for this symbol
+            # Charts are keyed by symbol name (e.g. "EURUSD")
+            # But symbol.name might be "EURUSD" or "EURUSD.r" etc.
+            
+            logger.debug(f"Checking charts for {symbol.name}. Active charts: {list(self.charts.keys())}")
+            
+            # Direct match
+            if symbol.name in self.charts:
+                logger.debug(f"Updating chart for {symbol.name} with price {symbol.last}")
+                self.charts[symbol.name].update_tick(symbol)
     
     @pyqtSlot(Order)
     def _on_order_placed(self, order: Order):
