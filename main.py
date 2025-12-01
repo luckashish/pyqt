@@ -205,6 +205,9 @@ class MainWindow(QMainWindow):
             self.charts = {}
         self.charts[symbol] = chart
         
+        # Connect alert signal
+        chart.alert_triggered.connect(self._on_alert_triggered)
+        
         # Add one-click trading panel overlay or side widget
         # For now, we'll wrap it in a layout to add the trading panel
         container = QWidget()
@@ -471,6 +474,39 @@ class MainWindow(QMainWindow):
             if symbol.name in self.charts:
                 logger.debug(f"Updating chart for {symbol.name} with price {symbol.last}")
                 self.charts[symbol.name].update_tick(symbol)
+    
+    @pyqtSlot(object)
+    def _on_alert_triggered(self, alert):
+        """Handle alert being triggered."""
+        from data.models import Alert
+        
+        logger.info(f"Alert triggered: {alert.symbol} {alert.condition} {alert.price}")
+        
+        # Build notification message
+        message = f"{alert.symbol}\n{alert.condition.upper()} {alert.price:.2f}"
+        
+        # Show notification based on type
+        if alert.notification_type in ["visual", "both"]:
+            # Desktop notification
+            QMessageBox.information(
+                self,
+                "Price Alert Triggered!",
+                message,
+                QMessageBox.Ok
+            )
+        
+        if alert.notification_type in ["audio", "both"]:
+            # Play sound (requires QSound or similar)
+            try:
+                from PyQt5.QtMultimedia import QSound
+                # You would need an alert sound file
+                # QSound.play("resources/alert.wav")
+                logger.info("Audio alert (sound file not configured)")
+            except ImportError:
+                logger.warning("QMultimedia not available for audio alerts")
+        
+        # Update status bar
+        self.status_bar.showMessage(f"Alert triggered: {alert.symbol} {alert.condition} {alert.price}", 10000)
     
     @pyqtSlot(Order)
     def _on_order_placed(self, order: Order):

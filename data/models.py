@@ -167,3 +167,6 @@ class Alert:
     enabled: bool = True
     triggered: bool = False
     created_time: datetime = field(default_factory=datetime.now)
+    notification_type: str = "both"  # "visual", "audio", "both"
+    last_price: float = 0.0  # Track last price to detect crossover
+    triggered_time: Optional[datetime] = None

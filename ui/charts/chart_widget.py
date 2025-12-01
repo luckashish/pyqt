@@ -94,6 +94,9 @@ class DateAxis(pg.AxisItem):
 class ChartWidget(QWidget):
     """Main chart widget."""
     
+    # Signals
+    alert_triggered = pyqtSignal(object)  # Emits Alert object when triggered
+    
     def __init__(self, symbol="", timeframe="M5"):
         super().__init__()
         self.symbol = symbol
@@ -130,6 +133,10 @@ class ChartWidget(QWidget):
         # Store indicator plots
         self.indicator_plots = {}
         self.indicator_curves = [] # List of (name, curve_item)
+        
+        # Store alerts
+        self.alerts = []  # List of Alert objects
+        self.alert_lines = []  # List of (Alert, InfiniteLine, TextItem) tuples
         
         # Placeholder for data
         self.candle_item = None
@@ -267,12 +274,22 @@ class ChartWidget(QWidget):
                 self.data.append(new_candle)
                 last_candle = new_candle
                 
-                # We need to add this to the plot item
-                # Since CandlestickItem takes fixed data, we might need to recreate it 
-                # or append to it if we support it.
-                # Our update_last_candle only updates existing.
-                # Let's append to data and trigger full update for now to be safe with X-axis
-                self.update_chart(self.data)
+                # Instead of full update_chart, just append to existing data
+                # Get the new candle index
+                new_idx = len(self.data) - 1
+                
+                # Append to candle_item data
+                new_candle_data = (new_idx, price, price, price, price)
+                self.candle_item.data.append(new_candle_data)
+                
+                # Update timestamps
+                self.date_axis.timestamps.append(current_candle_time)
+                
+                # Regenerate picture
+                self.candle_item.prepareGeometryChange()
+                self.candle_item.generatePicture()
+                self.candle_item.update()
+                
                 return
 
         # Update last candle
@@ -301,12 +318,33 @@ class ChartWidget(QWidget):
                     last_candle.low,
                     last_candle.high
                 )
+        
+        # Check if any alerts should trigger
+        self.check_alerts(price)
 
     def contextMenuEvent(self, event):
         """Show context menu."""
         from PyQt5.QtWidgets import QMenu, QAction
         
         menu = QMenu(self)
+        
+        # Create Alert
+        create_alert_action = QAction("Create Alert...", self)
+        create_alert_action.triggered.connect(self._show_create_alert_dialog)
+        menu.addAction(create_alert_action)
+        
+        # Manage Alerts (if any exist)
+        if self.alerts:
+            manage_menu = menu.addMenu("Manage Alerts")
+            for alert in self.alerts:
+                alert_text = f"{alert.condition.upper()} {alert.price:.2f}"
+                if alert.triggered:
+                    alert_text += " (TRIGGERED)"
+                action = QAction(alert_text, self)
+                action.triggered.connect(lambda checked, a=alert: self.remove_alert(a))
+                manage_menu.addAction(action)
+        
+        menu.addSeparator()
         
         # Remove Indicators
         if self.indicator_curves or self.indicator_plots:
@@ -393,3 +431,92 @@ class ChartWidget(QWidget):
         self.indicator_plots[name] = plot_item
         
         return plot_item
+
+    def add_alert(self, alert):
+        """Add a price alert to the chart."""
+        from data.models import Alert
+        
+        self.alerts.append(alert)
+        
+        # Create visual line
+        line = pg.InfiniteLine(
+            pos=alert.price,
+            angle=0,
+            pen=pg.mkPen(color='#ff9800', width=2, style=Qt.DashLine),
+            movable=False
+        )
+        
+        # Add label
+        label_text = f"{alert.condition.upper()} {alert.price:.2f}"
+        label = pg.TextItem(label_text, color='#ff9800', anchor=(0, 1))
+        label.setPos(0, alert.price)
+        
+        self.plot_item.addItem(line)
+        self.plot_item.addItem(label)
+        
+        self.alert_lines.append((alert, line, label))
+        
+    def remove_alert(self, alert):
+        """Remove an alert from the chart."""
+        if alert in self.alerts:
+            self.alerts.remove(alert)
+            
+        # Find and remove from alert_lines
+        for i, (a, line, label) in enumerate(self.alert_lines):
+            if a == alert:
+                self.plot_item.removeItem(line)
+                self.plot_item.removeItem(label)
+                self.alert_lines.pop(i)
+                break
+            
+    def check_alerts(self, current_price):
+        """Check if any alerts should be triggered."""
+        for alert in self.alerts[:]:
+            if not alert.enabled or alert.triggered:
+                continue
+                
+            # Check crossover
+            crossed = False
+            if alert.condition == "above" and alert.last_price < alert.price <= current_price:
+                crossed = True
+            elif alert.condition == "below" and alert.last_price > alert.price >= current_price:
+                crossed = True
+                
+            if crossed:
+                from datetime import datetime
+                alert.triggered = True
+                alert.triggered_time = datetime.now()
+                self.alert_triggered.emit(alert)
+                
+                # Change line color to indicate triggered
+                for a, line, label in self.alert_lines:
+                    if a == alert:
+                        line.setPen(pg.mkPen(color='#4caf50', width=2, style=Qt.DashLine))
+                        label.setColor('#4caf50')
+                        break
+                    
+            # Update last price for next check
+            alert.last_price = current_price
+
+    def _show_create_alert_dialog(self):
+        """Show dialog to create a new alert."""
+        from ui.alert_dialog import AlertDialog
+        from data.models import Alert
+        
+        # Get current price from last candle
+        current_price = self.data[-1].close if self.data else 0.0
+        
+        dialog = AlertDialog(self.symbol, current_price, self)
+        if dialog.exec_() == AlertDialog.Accepted:
+            alert_data = dialog.get_alert_data()
+            
+            # Create Alert object
+            alert = Alert(
+                symbol=self.symbol,
+                price=alert_data['price'],
+                condition=alert_data['condition'],
+                notification_type=alert_data['notification_type'],
+                last_price=current_price
+            )
+            
+            self.add_alert(alert)
