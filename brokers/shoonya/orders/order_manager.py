@@ -268,3 +268,20 @@ class ShoonyaOrderManager:
         except Exception as e:
             logger.error(f"Error parsing order: {e}")
             return None
+    def get_positions(self) -> List[dict]:
+        """
+        Get position book.
+        Returns list of position dictionaries.
+        """
+        api = self.auth_manager.get_api()
+        if not api:
+            return []
+            
+        try:
+            positions = api.get_positions()
+            if positions:
+                return positions
+            return []
+        except Exception as e:
+            logger.error(f"Error getting positions: {e}")
+            return []

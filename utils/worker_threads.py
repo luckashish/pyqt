@@ -173,3 +173,24 @@ class OrderBookWorker(QThread):
         except Exception as e:
             logger.error(f"Order book worker error: {e}")
             self.error_occurred.emit(str(e))
+
+
+class PositionBookWorker(QThread):
+    """Background worker for fetching position book."""
+    
+    # Signals
+    data_received = pyqtSignal(list)   # List of position dicts
+    error_occurred = pyqtSignal(str)   # Error message
+    
+    def __init__(self, broker):
+        super().__init__()
+        self.broker = broker
+    
+    def run(self):
+        """Fetch position book in background."""
+        try:
+            positions = self.broker.get_positions()
+            self.data_received.emit(positions)
+        except Exception as e:
+            logger.error(f"Position book worker error: {e}")
+            self.error_occurred.emit(str(e))

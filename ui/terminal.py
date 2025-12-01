@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QColor
-from utils.worker_threads import OrderBookWorker
+from utils.worker_threads import OrderBookWorker, PositionBookWorker
 
 class Terminal(QDockWidget):
     """Terminal dock widget."""
@@ -76,6 +76,10 @@ class Terminal(QDockWidget):
         self.order_book_tab = self._create_order_book_tab()
         self.terminal_tabs.addTab(self.order_book_tab, "Order Book")
         
+        # Position Book tab
+        self.position_book_tab = self._create_position_book_tab()
+        self.terminal_tabs.addTab(self.position_book_tab, "Position Book")
+        
         terminal_layout.addWidget(self.terminal_tabs)
         self.setWidget(terminal_widget)
         
@@ -141,6 +145,8 @@ class Terminal(QDockWidget):
         tab_text = self.terminal_tabs.tabText(index)
         if tab_text == "Order Book":
             self.refresh_order_book()
+        elif tab_text == "Position Book":
+            self.refresh_position_book()
             
     def refresh_order_book(self):
         """Refresh order book data."""
@@ -260,3 +266,87 @@ class Terminal(QDockWidget):
             self.margin_level_label.setStyleSheet("color: #f44336; font-weight: bold;")
         else:
             self.margin_level_label.setStyleSheet("")
+
+    def _create_position_book_tab(self):
+        """Create Position Book tab widget."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Toolbar
+        toolbar = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(QIcon.fromTheme("view-refresh"))
+        refresh_btn.clicked.connect(self.refresh_position_book)
+        toolbar.addWidget(refresh_btn)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        
+        # Table
+        self.position_book_table = QTableWidget(0, 12)
+        self.position_book_table.setHorizontalHeaderLabels([
+            "Symbol", "Net Qty", "Avg Price", "LTP", "P&L", "M2M", 
+            "Day Buy Qty", "Day Sell Qty", "Product", "CF Sell Qty", "Day Buy Amt", "Day Sell Amt"
+        ])
+        self.position_book_table.horizontalHeader().setStretchLastSection(True)
+        self.position_book_table.setAlternatingRowColors(True)
+        self.position_book_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.position_book_table)
+        
+        return widget
+
+    def refresh_position_book(self):
+        """Refresh position book data."""
+        if not hasattr(self, 'position_book_worker'):
+            self.position_book_worker = PositionBookWorker(self.broker)
+            self.position_book_worker.data_received.connect(self._update_position_book_table)
+        
+        if not self.position_book_worker.isRunning():
+            self.position_book_worker.start()
+
+    def _update_position_book_table(self, positions):
+        """Update Position Book table with data."""
+        self.position_book_table.setRowCount(len(positions))
+        
+        for row, pos in enumerate(positions):
+            # Symbol
+            self.position_book_table.setItem(row, 0, QTableWidgetItem(pos.get('tsym', '')))
+            
+            # Net Qty
+            net_qty = pos.get('netqty', '0')
+            qty_item = QTableWidgetItem(net_qty)
+            if int(net_qty) > 0:
+                qty_item.setForeground(QColor("#4caf50"))
+            elif int(net_qty) < 0:
+                qty_item.setForeground(QColor("#f44336"))
+            self.position_book_table.setItem(row, 1, qty_item)
+            
+            # Avg Price
+            self.position_book_table.setItem(row, 2, QTableWidgetItem(pos.get('netavgprc', '0.00')))
+            
+            # LTP
+            self.position_book_table.setItem(row, 3, QTableWidgetItem(pos.get('lp', '0.00')))
+            
+            # P&L (Realized)
+            rpnl = float(pos.get('rpnl', '0.00'))
+            pnl_item = QTableWidgetItem(f"{rpnl:.2f}")
+            pnl_item.setForeground(QColor("#4caf50") if rpnl >= 0 else QColor("#f44336"))
+            self.position_book_table.setItem(row, 4, pnl_item)
+            
+            # M2M (Unrealized)
+            urmtom = float(pos.get('urmtom', '0.00'))
+            m2m_item = QTableWidgetItem(f"{urmtom:.2f}")
+            m2m_item.setForeground(QColor("#4caf50") if urmtom >= 0 else QColor("#f44336"))
+            self.position_book_table.setItem(row, 5, m2m_item)
+            
+            # Day Stats
+            self.position_book_table.setItem(row, 6, QTableWidgetItem(pos.get('daybuyqty', '0')))
+            self.position_book_table.setItem(row, 7, QTableWidgetItem(pos.get('daysellqty', '0')))
+            
+            # Product Name
+            self.position_book_table.setItem(row, 8, QTableWidgetItem(pos.get('prd', '0')))
+            self.position_book_table.setItem(row, 9, QTableWidgetItem(pos.get('cfsellqty', '0')))
+
+            #Day Amt
+            self.position_book_table.setItem(row, 10, QTableWidgetItem(pos.get('daybuyamt', '0.00')))
+            self.position_book_table.setItem(row, 11, QTableWidgetItem(pos.get('daysellamt', '0.00')))
