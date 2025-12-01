@@ -65,7 +65,7 @@ class ShoonyaOrderManager:
                     price_type = 'SL-LMT'
             
             # Determine buy/sell
-            buy_or_sell = 'B' if order_type == OrderType.BUY else 'S'
+            buy_or_sell = 'B' if order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP] else 'S'
             
             # Place order via Shoonya API
             logger.info(f"Placing {order_type.value} order: {volume} {symbol} @ {price_type}")

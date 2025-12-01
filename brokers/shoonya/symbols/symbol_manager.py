@@ -109,6 +109,10 @@ class ShoonyaSymbolManager:
                 {'symbol': 'NIFTY 50', 'name': 'Nifty 50 Index', 'exchange': 'NSE'},
                 {'symbol': 'NIFTY BANK', 'name': 'Nifty Bank Index', 'exchange': 'NSE'},
             ]
+        if exchange == 'MCX':
+            return [
+                {'symbol': 'NATURALGAS-EQ', 'name': 'Natural Gas', 'exchange': 'MCX'},
+            ]
         elif exchange == 'BSE':
             return [
                 {'symbol': 'RELIANCE-EQ', 'name': 'Reliance Industries', 'exchange': 'BSE'},

@@ -1,4 +1,5 @@
 from PyQt5.QtWidgets import (
+    # Market Watch Widget
     QDockWidget, QTabWidget, QTableWidget, QTableWidgetItem, 
     QLabel, QWidget, QVBoxLayout, QCompleter, QStyledItemDelegate, QLineEdit
 )

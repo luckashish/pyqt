@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QDockWidget, QTabWidget, 
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, 
     QTreeWidgetItem, QPushButton, QMenuBar, QMenu, QAction, 
-    QToolBar, QStatusBar, QSplitter, QMessageBox
+    QToolBar, QStatusBar, QSplitter, QMessageBox, QDialog
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QModelIndex
 from PyQt5.QtGui import QIcon, QColor, QFont
@@ -27,8 +27,11 @@ from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker, Hist
 
 # UI Modules
 from ui.market_watch import MarketWatch
+from ui.navigator import Navigator
 from ui.terminal import Terminal
 from ui.order_dialog import OrderDialog
+from ui.indicator_dialog import IndicatorDialog
+from core.plugin_manager import plugin_manager
 
 
 class MainWindow(QMainWindow):
@@ -56,6 +59,9 @@ class MainWindow(QMainWindow):
         
         # Connect to broker
         self._connect_broker()
+        
+        # Load Plugins
+        self._load_plugins()
         
         # Setup update timers
         self._setup_timers()
@@ -305,7 +311,7 @@ class MainWindow(QMainWindow):
         
         # Subscribe to default symbols for testing
         # In production, this would be loaded from config or last session
-        test_symbols = ["NSE|22", "NSE|26000", "NSE|26009", "BSE|500325"] # ACC, Nifty 50, Bank Nifty, Reliance
+        test_symbols = ["MCX|463007", "NSE|22", "NSE|26000", "NSE|26009"] # NATURALGAS ACC, Nifty 50, Bank Nifty, Reliance
         self.broker.subscribe(test_symbols)
         
         # Setup autocomplete for Market Watch
@@ -473,38 +479,77 @@ class MainWindow(QMainWindow):
     
     def _create_navigator(self):
         """Create Navigator dock."""
-        self.navigator_dock = QDockWidget("Navigator", self)
-        self.navigator_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.navigator = Navigator(self)
+        self.navigator.plugin_double_clicked.connect(self._on_plugin_double_clicked)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.navigator)
+
+    def _load_plugins(self):
+        """Load and initialize plugins."""
+        plugin_manager.discover_plugins()
+        # Update Navigator with loaded plugins
+        self.navigator.update_plugins(plugin_manager.get_all_plugins())
+
+    def _on_plugin_double_clicked(self, plugin_name, plugin_type):
+        """Handle plugin activation from Navigator."""
+        logger.info(f"Plugin activated: {plugin_name} ({plugin_type})")
         
-        # Create tree widget
-        tree = QTreeWidget()
-        tree.setHeaderHidden(True)
+        try:
+            if plugin_type == "Indicator":
+                self._apply_indicator(plugin_name)
+            elif plugin_type == "Script":
+                self._run_script(plugin_name)
+            elif plugin_type == "Strategy":
+                QMessageBox.information(self, "Strategy", f"Strategy '{plugin_name}' selected. (Not fully implemented)")
+        except Exception as e:
+            logger.error(f"Error executing plugin {plugin_name}: {e}")
+            QMessageBox.critical(self, "Plugin Error", f"Error executing plugin: {e}")
+
+    def _apply_indicator(self, name):
+        """Apply an indicator to the active chart."""
+        # Get active chart
+        current_index = self.chart_tabs.currentIndex()
+        if current_index == -1:
+            QMessageBox.warning(self, "No Chart", "Please open a chart first.")
+            return
+            
+        symbol = self.chart_tabs.tabText(current_index)
+        if symbol not in self.charts:
+            return
+            
+        chart_widget = self.charts[symbol]
         
-        # Add folders
-        accounts_item = QTreeWidgetItem(tree, ["Accounts"])
-        QTreeWidgetItem(accounts_item, ["Demo Account - 1000000"])
+        # Get indicator
+        indicator = plugin_manager.get_indicator(name)
+        if not indicator:
+            return
+            
+        # Get data
+        data = chart_widget.get_data()
+        if data is None or data.empty:
+            QMessageBox.warning(self, "No Data", "Chart has no data to calculate indicator.")
+            return
+            
+        # Configure Indicator
+        dialog = IndicatorDialog(indicator, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+            
+        # Get updated indicator
+        indicator = dialog.get_parameters()
         
-        indicators_item = QTreeWidgetItem(tree, ["Indicators"])
-        trend_item = QTreeWidgetItem(indicators_item, ["Trend"])
-        QTreeWidgetItem(trend_item, ["Moving Average"])
-        QTreeWidgetItem(trend_item, ["Bollinger Bands"])
-        oscillators_item = QTreeWidgetItem(indicators_item, ["Oscillators"])
-        QTreeWidgetItem(oscillators_item, ["RSI"])
-        QTreeWidgetItem(oscillators_item, ["MACD"])
+        # Calculate
+        logger.info(f"Calculating {name} for {symbol}...")
+        data = indicator.calculate(data)
         
-        ea_item = QTreeWidgetItem(tree, ["Expert Advisors"])
-        QTreeWidgetItem(ea_item, ["Sample EA"])
-        
-        scripts_item = QTreeWidgetItem(tree, ["Scripts"])
-        QTreeWidgetItem(scripts_item, ["Close All"])
-        
-        examples_item = QTreeWidgetItem(tree, ["Examples"])
-        
-        # Expand all
-        tree.expandAll()
-        
-        self.navigator_dock.setWidget(tree)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.navigator_dock)
+        # Plot
+        indicator.plot(chart_widget, data)
+        logger.info(f"Applied {name} to {symbol}")
+
+    def _run_script(self, name):
+        """Run a script."""
+        script = plugin_manager.get_script(name)
+        if script:
+            script.run(broker=self.broker, parent=self)
 
     def _create_status_bar(self):
         """Create status bar."""

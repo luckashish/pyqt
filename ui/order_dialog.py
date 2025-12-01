@@ -58,7 +58,7 @@ class OrderDialog(QDialog):
         
         self.is_buy = True
         self.order_type = "MARKET" # MARKET, LIMIT, SL-M, SL-L
-        self.product_type = "C" # C (CNC/Delivery), M (MIS/Intraday)
+        self.product_type = "I" # C (CNC/Delivery), I (MIS/Intraday)
         
         self._init_ui()
         

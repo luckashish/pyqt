@@ -95,42 +95,72 @@ class ChartWidget(QWidget):
         pg.setConfigOption('background', '#1e1e1e')
         pg.setConfigOption('foreground', '#dcdcdc')
         
+        # Create GraphicsLayoutWidget
+        self.layout_widget = pg.GraphicsLayoutWidget()
+        self.layout.addWidget(self.layout_widget)
+        
         # Create custom DateAxis
         self.date_axis = DateAxis(orientation='bottom')
         
-        # Create PlotWidget with custom axis
-        self.plot_widget = pg.PlotWidget(axisItems={'bottom': self.date_axis})
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setLabel('left', 'Price')
-        # self.plot_widget.setLabel('bottom', 'Time') # Axis handles labels now
+        # Add main plot area
+        self.plot_item = self.layout_widget.addPlot(row=0, col=0, axisItems={'bottom': self.date_axis})
+        self.plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_item.setLabel('left', 'Price')
+        self.plot_item.addLegend()
         
         # Enable crosshair
         self.v_line = pg.InfiniteLine(angle=90, movable=False)
         self.h_line = pg.InfiniteLine(angle=0, movable=False)
-        self.plot_widget.addItem(self.v_line, ignoreBounds=True)
-        self.plot_widget.addItem(self.h_line, ignoreBounds=True)
+        self.plot_item.addItem(self.v_line, ignoreBounds=True)
+        self.plot_item.addItem(self.h_line, ignoreBounds=True)
         
         # Mouse movement for crosshair
-        self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
+        self.proxy = pg.SignalProxy(self.plot_item.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
         
-        self.layout.addWidget(self.plot_widget)
+        # Store indicator plots
+        self.indicator_plots = {}
+        self.indicator_curves = [] # List of (name, curve_item)
         
         # Placeholder for data
         self.candle_item = None
+        self.data = [] # List of OHLCData
+        
+    def get_data(self):
+        """
+        Get current chart data as DataFrame.
+        Returns: pd.DataFrame or None
+        """
+        if not self.data:
+            return None
+            
+        import pandas as pd
+        
+        # Convert OHLCData objects to dicts
+        data_list = [c.__dict__ for c in self.data]
+        df = pd.DataFrame(data_list)
+        
+        # Ensure timestamp is datetime and set as index
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df.set_index('timestamp', inplace=True)
+            
+        return df
         
     def update_chart(self, ohlc_data):
         """
         Update chart with new OHLC data.
         ohlc_data: List of OHLCData objects
         """
+        self.data = ohlc_data
+        
         if not ohlc_data:
             return
             
-        self.plot_widget.clear()
+        self.plot_item.clear()
         
         # Re-add crosshairs
-        self.plot_widget.addItem(self.v_line, ignoreBounds=True)
-        self.plot_widget.addItem(self.h_line, ignoreBounds=True)
+        self.plot_item.addItem(self.v_line, ignoreBounds=True)
+        self.plot_item.addItem(self.h_line, ignoreBounds=True)
         
         # Prepare data for CandlestickItem
         # Format: (time_index, open, close, low, high)
@@ -153,24 +183,102 @@ class ChartWidget(QWidget):
             
         # Create and add item
         self.candle_item = CandlestickItem(chart_data)
-        self.plot_widget.addItem(self.candle_item)
-        
-        # Manual ticks no longer needed, DateAxis handles it
-        # axis = self.plot_widget.getAxis('bottom')
-        # n = max(1, len(timestamps) // 10)
-        # ticks = [(i, t) for i, t in enumerate(timestamps) if i % n == 0]
-        # axis.setTicks([ticks])
+        self.plot_item.addItem(self.candle_item)
         
         # Auto range
-        self.plot_widget.enableAutoRange()
+        self.plot_item.enableAutoRange()
         
         # Set title
-        self.plot_widget.setTitle(f"{self.symbol} ({self.timeframe})")
+        self.plot_item.setTitle(f"{self.symbol} ({self.timeframe})")
+
+    def contextMenuEvent(self, event):
+        """Show context menu."""
+        from PyQt5.QtWidgets import QMenu, QAction
+        
+        menu = QMenu(self)
+        
+        # Remove Indicators
+        if self.indicator_curves or self.indicator_plots:
+            remove_menu = menu.addMenu("Remove Indicator")
+            
+            # Main chart indicators
+            for name, curve in self.indicator_curves:
+                action = QAction(name, self)
+                action.triggered.connect(lambda checked, n=name: self.remove_indicator(n))
+                remove_menu.addAction(action)
+                
+            # Separate plot indicators
+            for name in self.indicator_plots:
+                action = QAction(name, self)
+                action.triggered.connect(lambda checked, n=name: self.remove_indicator(n))
+                remove_menu.addAction(action)
+                
+            menu.addSeparator()
+            clear_action = QAction("Clear All Indicators", self)
+            clear_action.triggered.connect(self.clear_indicators)
+            menu.addAction(clear_action)
+            
+        menu.exec_(event.globalPos())
+        
+    def remove_indicator(self, name):
+        """Remove an indicator by name."""
+        # Check main plot curves
+        for i, (n, curve) in enumerate(self.indicator_curves):
+            if n == name:
+                self.plot_item.removeItem(curve)
+                self.indicator_curves.pop(i)
+                # Also remove from legend? PyQtGraph legend removal is tricky, 
+                # usually clearing and re-adding is easier or just hiding.
+                # For now, we just remove the item.
+                return
+                
+        # Check separate plots
+        if name in self.indicator_plots:
+            plot_item = self.indicator_plots[name]
+            self.layout_widget.removeItem(plot_item)
+            del self.indicator_plots[name]
+            return
+            
+    def clear_indicators(self):
+        """Remove all indicators."""
+        # Clear main chart curves
+        for name, curve in self.indicator_curves:
+            self.plot_item.removeItem(curve)
+        self.indicator_curves.clear()
+        
+        # Clear separate plots
+        for name, plot_item in self.indicator_plots.items():
+            self.layout_widget.removeItem(plot_item)
+        self.indicator_plots.clear()
 
     def mouse_moved(self, evt):
         """Update crosshair position."""
         pos = evt[0]
-        if self.plot_widget.sceneBoundingRect().contains(pos):
-            mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+        if self.plot_item.sceneBoundingRect().contains(pos):
+            mouse_point = self.plot_item.vb.mapSceneToView(pos)
+            self.v_line.setPos(mouse_point.x())
             self.v_line.setPos(mouse_point.x())
             self.h_line.setPos(mouse_point.y())
+
+    def add_indicator_plot(self, name: str, height_ratio: float = 0.25):
+        """
+        Add a separate plot area for an indicator.
+        """
+        if name in self.indicator_plots:
+            return self.indicator_plots[name]
+            
+        # Add new row
+        self.layout_widget.nextRow()
+        
+        # Create plot item
+        # Link X-axis to main plot for synchronized zooming
+        plot_item = self.layout_widget.addPlot(axisItems={'bottom': DateAxis(orientation='bottom')})
+        plot_item.setXLink(self.plot_item)
+        plot_item.showGrid(x=True, y=True, alpha=0.3)
+        plot_item.setLabel('left', name)
+        plot_item.setMaximumHeight(200) # Limit height
+        
+        # Store
+        self.indicator_plots[name] = plot_item
+        
+        return plot_item
