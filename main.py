@@ -1055,6 +1055,46 @@ class MainWindow(QMainWindow):
                 "Failed to start Bearish Breakout EA. Check logs for details."
             )
     
+    def _start_fixed_price_trigger_ea(self):
+        """Start Fixed Price Trigger EA."""
+        ea = ea_manager.get_ea("Fixed Price Trigger EA")
+        
+        if not ea:
+            QMessageBox.warning(
+                self,
+                "EA Not Found",
+                "Fixed Price Trigger EA not registered. Please restart the application."
+            )
+            return
+        
+        if ea.is_running:
+            QMessageBox.information(
+                self,
+                "EA Running",
+                "Fixed Price Trigger EA is already running."
+            )
+            return
+        
+        success = ea_manager.start_ea("Fixed Price Trigger EA")
+        
+        if success:
+            self.ea_panel.refresh_table()
+            QMessageBox.information(
+                self,
+                "EA Started",
+                "Fixed Price Trigger EA started successfully!\n\n"
+                "Strategy: Price threshold trigger\n"
+                "Trigger Price: 440.0\n"
+                "BUY when price > 440, SELL when price < 440\n\n"
+                "Monitor EA Control Panel for signals."
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "EA Error",
+                "Failed to start Fixed Price Trigger EA. Check logs for details."
+            )
+    
     def _on_ea_signal(self, signal):
         """Handle EA signal."""
         from data.models import EASignal
