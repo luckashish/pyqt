@@ -195,8 +195,13 @@ class ShoonyaWebSocketClient:
             # However, FeedManager.update_tick usually expects a full object or we need a partial update mechanism.
             # For now, we'll create a Symbol with what we have.
             
+            # Create both pipe and colon formats for symbol normalization
+            pipe_format = f"{exchange}|{token}"
+            trading_symbol = tick_data.get('ts', '')
+            
             symbol = Symbol(
-                name=symbol_name,
+                name=pipe_format,  # Use pipe format as primary name
+                display_name=symbol_name,  # Colon format for display and matching
                 bid=bid,
                 ask=ask,
                 last=last,
@@ -204,7 +209,7 @@ class ShoonyaWebSocketClient:
                 low=low,
                 close=close,
                 volume=volume,
-                description="" # We don't have this in tick
+                description=trading_symbol
             )
             
             # Push to Feed Manager

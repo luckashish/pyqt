@@ -33,6 +33,15 @@ class EventBus(QObject):
     # Plugin signals
     indicator_applied = pyqtSignal(str, str)  # indicator name, symbol
     
+    # EA signals
+    ea_started = pyqtSignal(str)  # EA name
+    ea_stopped = pyqtSignal(str)  # EA name
+    ea_paused = pyqtSignal(str)  # EA name
+    ea_signal_generated = pyqtSignal(object)  # EASignal
+    ea_order_request = pyqtSignal(object)  # Order request
+    ea_error = pyqtSignal(str, str)  # EA name, error message
+    ea_performance_update = pyqtSignal(str, dict)  # EA name, performance data
+    
     _instance = None
     
     def __new__(cls):

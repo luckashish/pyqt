@@ -31,7 +31,17 @@ from ui.navigator import Navigator
 from ui.terminal import Terminal
 from ui.order_dialog import OrderDialog
 from ui.indicator_dialog import IndicatorDialog
+from ui.ea_control_panel import EAControlPanel
 from core.plugin_manager import plugin_manager
+
+# EA System
+from core.ea_manager import ea_manager
+from core.execution_service import execution_service
+from core.risk_manager import risk_manager
+from core.position_tracker import position_tracker
+from plugins.strategies.ma_crossover import create_ma_crossover_ea
+from plugins.strategies.bullish_breakout import create_bullish_breakout_ea
+from plugins.strategies.bearish_breakout import create_bearish_breakout_ea
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +63,11 @@ class MainWindow(QMainWindow):
         
         # Create broker instance (now config is loaded!)
         self.broker = broker_factory.create_broker()  # Uses config.yaml
+        
+        # CRITICAL: Connect candle_updated events to EA Manager for bar-based strategies
+        logger.info("Connecting candle_updated to EA Manager...")
+        event_bus.candle_updated.connect(lambda symbol, bar: ea_manager.on_bar(symbol, bar))
+        logger.info("[OK] Event bus connected - EAs will receive bar close events")
         
         # Initialize UI
         self._init_ui()
@@ -89,6 +104,12 @@ class MainWindow(QMainWindow):
         # Create Terminal dock (bottom)
         self.terminal = Terminal(self.broker, self)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal)
+        
+        # Create EA Control Panel dock (right)
+        self.ea_panel = EAControlPanel(self)
+        ea_dock = QDockWidget("Expert Advisors", self)
+        ea_dock.setWidget(self.ea_panel)
+        self.addDockWidget(Qt.RightDockWidgetArea, ea_dock)
         
         # Create status bar
         self._create_status_bar()
@@ -131,6 +152,24 @@ class MainWindow(QMainWindow):
         tools_menu = menubar.addMenu("Tools")
         tools_menu.addAction("Options")
         tools_menu.addAction("MetaQuotes Language Editor")
+        tools_menu.addSeparator()
+        
+        # EA sub-menu
+        ea_submenu = tools_menu.addMenu("Expert Advisors")
+        start_ma_ea_action = QAction("Start MA Crossover EA", self)
+        start_ma_ea_action.triggered.connect(self._start_ma_crossover_ea)
+        ea_submenu.addAction(start_ma_ea_action)
+        
+        start_breakout_ea_action = QAction("Start Bullish Breakout EA", self)
+        start_breakout_ea_action.triggered.connect(self._start_bullish_breakout_ea)
+        ea_submenu.addAction(start_breakout_ea_action)
+        
+        start_bearish_ea_action = QAction("Start Bearish Breakout EA", self)
+        start_bearish_ea_action.triggered.connect(self._start_bearish_breakout_ea)
+        ea_submenu.addAction(start_bearish_ea_action)
+        
+        ea_submenu.addAction("Stop All EAs").triggered.connect(lambda: ea_manager.stop_all())
+        
         tools_menu.addSeparator()
         
         clear_cache_action = QAction("Clear Cache", self)
@@ -274,24 +313,38 @@ class MainWindow(QMainWindow):
     
     def _connect_broker(self):
         """Connect to broker asynchronously."""
-        # Connect event handlers
-        event_bus.tick_received.connect(self._on_tick_received)
-        event_bus.order_placed.connect(self._on_order_placed)
-        event_bus.order_closed.connect(self._on_order_closed)
-        event_bus.account_updated.connect(self._on_account_updated)
-        
-        # Create worker thread for connection
-        self.connection_worker = BrokerConnectionWorker(
-            self.broker, "Demo Server", "demo_user", "password"
-        )
-        
-        # Connect worker signals
-        self.connection_worker.progress_update.connect(self._on_connection_progress)
-        self.connection_worker.connection_success.connect(self._on_connection_success)
-        self.connection_worker.connection_failed.connect(self._on_connection_failed)
-        
-        # Start connection in background
-        self.connection_worker.start()
+        try:
+            logger.info("=== _connect_broker called ===")
+            
+            # Connect event handlers
+            event_bus.tick_received.connect(self._on_tick_received)
+            event_bus.order_placed.connect(self._on_order_placed)
+            event_bus.order_closed.connect(self._on_order_closed)
+            event_bus.account_updated.connect(self._on_account_updated)
+            
+            logger.info("About to connect candle_updated to EA Manager...")
+            
+            # Connect bar close events to EA Manager (CRITICAL for Breakout EAs!)
+            event_bus.candle_updated.connect(lambda symbol, bar: ea_manager.on_bar(symbol, bar))
+            logger.info("[OK] Connected candle_updated to EA Manager for bar-based strategies")
+            
+            # Create worker thread for connection
+            self.connection_worker = BrokerConnectionWorker(
+                self.broker, "Demo Server", "demo_user", "password"
+            )
+            
+            # Connect worker signals
+            self.connection_worker.progress_update.connect(self._on_connection_progress)
+            self.connection_worker.connection_success.connect(self._on_connection_success)
+            self.connection_worker.connection_failed.connect(self._on_connection_failed)
+            
+            # Start connection in background
+            self.connection_worker.start()
+            
+        except Exception as e:
+            logger.error(f"!!! ERROR in _connect_broker: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _on_connection_progress(self, message):
         """Handle connection progress updates."""
@@ -325,6 +378,9 @@ class MainWindow(QMainWindow):
             all_symbols = self.broker.symbol_manager.get_all_symbols()
             self.market_watch.set_search_completer(all_symbols)
             logger.info(f"Loaded {len(all_symbols)} symbols for autocomplete")
+        
+        # Initialize EA system
+        self._init_ea_system()
         
         # Start time timer only (market data handled by worker)
         self._setup_timers()
@@ -462,6 +518,9 @@ class MainWindow(QMainWindow):
         # Update Market Watch incrementally
         self.market_watch.update_tick(symbol)
         
+        # Route to EA Manager
+        ea_manager.on_tick(symbol)
+        
         # Update Charts
         if hasattr(self, 'charts'):
             # Check if we have any charts for this symbol
@@ -550,7 +609,11 @@ class MainWindow(QMainWindow):
             elif plugin_type == "Script":
                 self._run_script(plugin_name)
             elif plugin_type == "Strategy":
-                QMessageBox.information(self, "Strategy", f"Strategy '{plugin_name}' selected. (Not fully implemented)")
+                # For MA Crossover EA specifically
+                if "MA Crossover" in plugin_name:
+                    self._start_ma_crossover_ea()
+                else:
+                    QMessageBox.information(self, "Strategy", f"Strategy '{plugin_name}' selected.")
         except Exception as e:
             logger.error(f"Error executing plugin {plugin_name}: {e}")
             QMessageBox.critical(self, "Plugin Error", f"Error executing plugin: {e}")
@@ -775,10 +838,243 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to clear cache: {str(e)}")
                 logger.error(f"Failed to clear cache: {e}")
 
+    def _init_ea_system(self):
+        """Initialize Expert Advisor system."""
+        logger.info("Initializing EA system...")
+        
+        try:
+            # Set broker for execution service
+            execution_service.set_broker(self.broker)
+            execution_service.set_paper_trading(True)  # Start in paper trading mode for safety
+            
+            # Connect EA signals to event bus
+            ea_manager.signal_generated.connect(self._on_ea_signal)
+            ea_manager.ea_started.connect(lambda name: self.status_bar.showMessage(f"EA Started: {name}", 3000))
+            ea_manager.ea_stopped.connect(lambda name: self.status_bar.showMessage(f"EA Stopped: {name}", 3000))
+            ea_manager.ea_error.connect(self._on_ea_error)
+            
+            # Connect execution service signals
+            execution_service.order_placed.connect(self._on_order_placed)
+            execution_service.order_rejected.connect(self._on_order_rejected)
+            
+            # Connect position tracker signals
+            position_tracker.position_opened.connect(lambda p: logger.info(f"Position opened: {p.symbol}"))
+            position_tracker.position_closed.connect(lambda p: logger.info(f"Position closed: {p.symbol} P/L: {p.profit:.2f}"))
+            
+            # Create and register MA Crossover EA
+            ma_ea = create_ma_crossover_ea(
+                symbol="MCX|463007",  # Nifty 50
+                timeframe="M1",
+                fast_period=10,
+                slow_period=20,
+                ma_type="SMA",
+                lot_size=1,
+                stop_loss_pips=50,
+                take_profit_pips=100,
+                use_trailing_stop=True,
+                trailing_stop_pips=30
+            )
+            
+            ea_manager.register_ea(ma_ea)
+            
+            # Create and register Bullish Breakout EA
+            breakout_ea = create_bullish_breakout_ea(
+                symbol="MCX|463007",  # Nifty 50
+                timeframe="M1",
+                sl_buffer_pips=5,  # 5 pips buffer below previous candle low
+                lot_size=1,
+                take_profit_pips=0,  # Auto-calculate as 2x risk
+                use_trailing_stop=True,
+                trailing_stop_pips=30
+            )
+            
+            ea_manager.register_ea(breakout_ea)
+            
+            # Create and register Bearish Breakout EA
+            bearish_ea = create_bearish_breakout_ea(
+                symbol="MCX|463007",  # Nifty 50
+                timeframe="M1",
+                sl_buffer_pips=5,  # 5 pips buffer above previous candle high
+                lot_size=1,
+                take_profit_pips=0,  # Auto-calculate as 2x risk
+                use_trailing_stop=True,
+                trailing_stop_pips=30
+            )
+            
+            ea_manager.register_ea(bearish_ea)
+            
+            # Refresh EA panel
+            self.ea_panel.refresh_table()
+            
+            logger.info("EA system initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize EA system: {e}")
+            QMessageBox.warning(
+                self,
+                "EA System Error",
+                f"Failed to initialize Expert Advisor system:\n{e}"
+            )
+    
+    def _start_ma_crossover_ea(self):
+        """Start MA Crossover EA."""
+        ea = ea_manager.get_ea("MA Crossover EA")
+        
+        if not ea:
+            QMessageBox.warning(
+                self,
+                "EA Not Found",
+                "MA Crossover EA not registered. Please restart the application."
+            )
+            return
+        
+        # Check if already running
+        if ea.is_running:
+            QMessageBox.information(
+                self,
+                "EA Running",
+                "MA Crossover EA is already running."
+            )
+            return
+        
+        # Start EA
+        success = ea_manager.start_ea("MA Crossover EA")
+        
+        if success:
+            self.ea_panel.refresh_table()
+            QMessageBox.information(
+                self,
+                "EA Started",
+                "MA Crossover EA started successfully!\n\n"
+                "Monitor the EA Control Panel for trading signals and performance."
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "EA Error",
+                "Failed to start MA Crossover EA. Check logs for details."
+            )
+    
+    def _start_bullish_breakout_ea(self):
+        """Start Bullish Breakout EA."""
+        ea = ea_manager.get_ea("Bullish Breakout EA")
+        
+        if not ea:
+            QMessageBox.warning(
+                self,
+                "EA Not Found",
+                "Bullish Breakout EA not registered. Please restart the application."
+            )
+            return
+        
+        # Check if already running
+        if ea.is_running:
+            QMessageBox.information(
+                self,
+                "EA Running",
+                "Bullish Breakout EA is already running."
+            )
+            return
+        
+        # Start EA
+        success = ea_manager.start_ea("Bullish Breakout EA")
+        
+        if success:
+            self.ea_panel.refresh_table()
+            QMessageBox.information(
+                self,
+                "EA Started",
+                "Bullish Breakout EA started successfully!\n\n"
+                "Pattern: Lower low, Higher high, Higher close\n"
+                "Entry: Previous-to-previous candle high\n"
+                "SL: Previous candle low with buffer\n\n"
+                "Monitor EA Control Panel for signals."
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "EA Error",
+                "Failed to start Bullish Breakout EA. Check logs for details."
+            )
+    
+    def _start_bearish_breakout_ea(self):
+        """Start Bearish Breakout EA."""
+        ea = ea_manager.get_ea("Bearish Breakout EA")
+        
+        if not ea:
+            QMessageBox.warning(
+                self,
+                "EA Not Found",
+                "Bearish Breakout EA not registered. Please restart the application."
+            )
+            return
+        
+        # Check if already running
+        if ea.is_running:
+            QMessageBox.information(
+                self,
+                "EA Running",
+                "Bearish Breakout EA is already running."
+            )
+            return
+        
+        # Start EA
+        success = ea_manager.start_ea("Bearish Breakout EA")
+        
+        if success:
+            self.ea_panel.refresh_table()
+            QMessageBox.information(
+                self,
+                "EA Started",
+                "Bearish Breakout EA started successfully!\n\n"
+                "Pattern: Higher high, Lower low, Lower close\n"
+                "Entry: Previous-to-previous candle low\n"
+                "SL: Previous candle high with buffer\n\n"
+                "Monitor EA Control Panel for signals."
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "EA Error",
+                "Failed to start Bearish Breakout EA. Check logs for details."
+            )
+    
+    def _on_ea_signal(self, signal):
+        """Handle EA signal."""
+        from data.models import EASignal
+        
+        logger.info(f"EA Signal: {signal.ea_name} - {signal.signal_type} @ {signal.price}")
+        
+        # Show notification
+        self.status_bar.showMessage(
+            f"{signal.ea_name}: {signal.signal_type} {signal.symbol} @ {signal.price}",
+            5000
+        )
+        
+        # Emit to event bus
+        event_bus.ea_signal_generated.emit(signal)
+    
+    def _on_ea_error(self, ea_name: str, error_msg: str):
+        """Handle EA error."""
+        logger.error(f"EA Error - {ea_name}: {error_msg}")
+        self.status_bar.showMessage(f"EA Error - {ea_name}: {error_msg}", 10000)
+        self.ea_panel.refresh_table()
+    
+    def _on_order_rejected(self, ea_name: str, reason: str):
+        """Handle order rejection."""
+        logger.warning(f"Order rejected from {ea_name}: {reason}")
+        self.status_bar.showMessage(f"Order rejected: {reason}", 5000)
+
     def closeEvent(self, event):
         """Handle application close."""
         logger.info("Application closing...")
+        
+        # Stop all EAs
+        ea_manager.stop_all()
+        
+        # Disconnect broker
         self.broker.disconnect()
+        
         event.accept()
 
 

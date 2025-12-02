@@ -61,6 +61,14 @@ class PluginManager:
                     # Avoid loading base classes if they are imported
                     if obj in [Indicator, Strategy, Script]:
                         continue
+                    
+                    # Skip ExpertAdvisor base class (it's abstract)
+                    if obj.__name__ == 'ExpertAdvisor':
+                        continue
+                    
+                    # Skip any abstract classes
+                    if inspect.isabstract(obj):
+                        continue
                         
                     # Instantiate and register
                     try:

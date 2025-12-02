@@ -3,6 +3,9 @@ from PyQt5.QtCore import QObject
 from typing import Dict, List
 from data.models import Symbol, OHLCData
 from core.event_bus import event_bus
+from core.candle_builder import candle_builder
+from utils.symbol_normalizer import symbol_normalizer
+from utils.logger import logger
 from datetime import datetime, timedelta
 
 
@@ -14,6 +17,32 @@ class FeedManager(QObject):
         self._symbols: Dict[str, Symbol] = {}
         self._candles: Dict[str, List[OHLCData]] = {}  # symbol -> candles
         self._subscribers: Dict[str, int] = {}  # symbol -> subscriber count
+        
+        # Listen to candle_updated events to auto-store candles
+        event_bus.candle_updated.connect(self._on_candle_updated)
+    
+    def _on_candle_updated(self, symbol: str, candle: OHLCData):
+        """
+        Auto-store candles when they close (from candle builder or external).
+        
+        Args:
+            symbol: Symbol name
+            candle: Closed candle
+        """
+        if symbol not in self._candles:
+            self._candles[symbol] = []
+        
+        candles = self._candles[symbol]
+        
+        # Check if this is a new candle or update
+        if candles and candles[-1].timestamp == candle.timestamp:
+            candles[-1] = candle  # Update existing
+        else:
+            candles.append(candle)  # New candle
+            
+            # Keep only last 1000 candles
+            if len(candles) > 1000:
+                candles.pop(0)
     
     def update_tick(self, symbol_data: Symbol):
         """
@@ -23,7 +52,18 @@ class FeedManager(QObject):
             symbol_data: Updated symbol information
         """
         self._symbols[symbol_data.name] = symbol_data
+        
+        # Debug: Log symbol formats
+        if symbol_data.display_name and symbol_data.display_name != symbol_data.name:
+            logger.debug(f"Symbol formats: {symbol_data.name} <-> {symbol_data.display_name}")
+        
+        # Auto-register symbol format mapping
+        symbol_normalizer.auto_register_from_symbol(symbol_data)
+        
         event_bus.tick_received.emit(symbol_data)
+        
+        # Build candles from ticks (emits candle_updated on close)
+        candle_builder.process_tick(symbol_data)
     
     def update_candle(self, symbol: str, candle: OHLCData):
         """
