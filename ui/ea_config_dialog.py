@@ -9,252 +9,267 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-from data.models import EAConfig
+from core.ea_base import ExpertAdvisor
 from utils.logger import logger
 
 
 class EAConfigDialog(QDialog):
     """
     Dialog for configuring Expert Advisor parameters.
+    Dynamically creates parameter fields based on EA's config.
     """
     
-    def __init__(self, ea_config: EAConfig, parent=None):
+    def __init__(self, ea: ExpertAdvisor, parent=None):
         super().__init__(parent)
         
-        self.config = ea_config
+        self.ea = ea
+        self.param_widgets = {}
+        
         self.init_ui()
-        self.load_config()
         
     def init_ui(self):
         """Initialize UI."""
-        self.setWindowTitle(f"Configure {self.config.name}")
+        self.setWindowTitle(f"Configure {self.ea.config.name}")
         self.setMinimumWidth(500)
         
         layout = QVBoxLayout(self)
         
         # Basic Settings
-        basic_group = QGroupBox("Basic Settings")
-        basic_layout = QFormLayout(basic_group)
+        layout.addWidget(self._create_basic_settings())
         
-        self.symbol_edit = QLineEdit()
-        self.symbol_edit.setPlaceholderText("e.g., NSE|26000, NSE|22")
-        basic_layout.addRow("Symbol:", self.symbol_edit)
-        
-        self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItems(["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
-        basic_layout.addRow("Timeframe:", self.timeframe_combo)
-        
-        layout.addWidget(basic_group)
-        
-        # Strategy Parameters
-        strategy_group = QGroupBox("Strategy Parameters")
-        strategy_layout = QFormLayout(strategy_group)
-        
-        self.fast_period_spin = QSpinBox()
-        self.fast_period_spin.setRange(1, 200)
-        self.fast_period_spin.setValue(10)
-        strategy_layout.addRow("Fast MA Period:", self.fast_period_spin)
-        
-        self.slow_period_spin = QSpinBox()
-        self.slow_period_spin.setRange(1, 200)
-        self.slow_period_spin.setValue(20)
-        strategy_layout.addRow("Slow MA Period:", self.slow_period_spin)
-        
-        self.ma_type_combo = QComboBox()
-        self.ma_type_combo.addItems(["SMA", "EMA"])
-        strategy_layout.addRow("MA Type:", self.ma_type_combo)
-        
-        layout.addWidget(strategy_group)
+        # Strategy Parameters (DYNAMIC)
+        layout.addWidget(self._create_strategy_params())
         
         # Risk Management
-        risk_group = QGroupBox("Risk Management")
-        risk_layout = QFormLayout(risk_group)
+        layout.addWidget(self._create_risk_management())
+        
+        # Trailing Stop
+        layout.addWidget(self._create_trailing_stop())
+        
+        # Filters
+        layout.addWidget(self._create_filters())
+        
+        # Buttons
+        layout.addLayout(self._create_buttons())
+        
+    def _create_basic_settings(self):
+        """Create basic settings section."""
+        group = QGroupBox("Basic Settings")
+        layout = QFormLayout(group)
+        
+        self.symbol_edit = QLineEdit()
+        self.symbol_edit.setText(self.ea.config.symbol)
+        self.symbol_edit.setPlaceholderText("e.g., NSE|26000, MCX|463007")
+        layout.addRow("Symbol:", self.symbol_edit)
+        
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItems(["M1", "M5", "M15", "M30", "H1", "H4", "D1", "TICK"])
+        index = self.timeframe_combo.findText(self.ea.config.timeframe)
+        if index >= 0:
+            self.timeframe_combo.setCurrentIndex(index)
+        layout.addRow("Timeframe:", self.timeframe_combo)
+        
+        return group
+    
+    def _create_strategy_params(self):
+        """Create strategy parameters section (DYNAMIC)."""
+        group = QGroupBox("Strategy Parameters")
+        layout = QFormLayout(group)
+        
+        # Dynamically create parameter fields
+        if self.ea.config.parameters:
+            for param_name, param_value in self.ea.config.parameters.items():
+                widget = self._create_param_widget(param_name, param_value)
+                self.param_widgets[param_name] = widget
+                
+                # Format parameter name for display
+                display_name = param_name.replace('_', ' ').title() + ":"
+                layout.addRow(display_name, widget)
+        else:
+            no_params_label = QLabel("This EA has no custom parameters")
+            no_params_label.setStyleSheet("color: gray; font-style: italic;")
+            layout.addRow(no_params_label)
+        
+        return group
+    
+    def _create_param_widget(self, param_name: str, param_value):
+        """Create appropriate widget for parameter based on its type."""
+        # Integer parameters
+        if isinstance(param_value, int):
+            widget = QSpinBox()
+            widget.setRange(-10000, 10000)
+            widget.setValue(param_value)
+            return widget
+        
+        # Float parameters
+        elif isinstance(param_value, float):
+            widget = QDoubleSpinBox()
+            widget.setRange(-10000.0, 10000.0)
+            widget.setDecimals(2)
+            widget.setValue(param_value)
+            return widget
+        
+        # Boolean parameters
+        elif isinstance(param_value, bool):
+            widget = QCheckBox()
+            widget.setChecked(param_value)
+            return widget
+        
+        # String parameters  
+        else:
+            widget = QLineEdit()
+            widget.setText(str(param_value))
+            return widget
+    
+    def _create_risk_management(self):
+        """Create risk management section."""
+        group = QGroupBox("Risk Management")
+        layout = QFormLayout(group)
         
         self.lot_size_spin = QDoubleSpinBox()
         self.lot_size_spin.setRange(0.01, 100)
         self.lot_size_spin.setSingleStep(0.1)
-        self.lot_size_spin.setValue(0.1)
-        risk_layout.addRow("Lot Size:", self.lot_size_spin)
+        self.lot_size_spin.setValue(self.ea.config.lot_size)
+        layout.addRow("Lot Size:", self.lot_size_spin)
         
         self.risk_percent_spin = QDoubleSpinBox()
         self.risk_percent_spin.setRange(0.1, 10)
         self.risk_percent_spin.setSingleStep(0.1)
-        self.risk_percent_spin.setValue(2.0)
+        self.risk_percent_spin.setValue(self.ea.config.risk_percent)
         self.risk_percent_spin.setSuffix(" %")
-        risk_layout.addRow("Risk per Trade:", self.risk_percent_spin)
-        
-        self.use_dynamic_sizing = QCheckBox("Use Dynamic Position Sizing")
-        risk_layout.addRow("", self.use_dynamic_sizing)
+        layout.addRow("Risk per Trade:", self.risk_percent_spin)
         
         self.sl_pips_spin = QDoubleSpinBox()
         self.sl_pips_spin.setRange(1, 1000)
-        self.sl_pips_spin.setValue(50)
+        self.sl_pips_spin.setValue(self.ea.config.stop_loss_pips)
         self.sl_pips_spin.setSuffix(" pips")
-        risk_layout.addRow("Stop Loss:", self.sl_pips_spin)
+        layout.addRow("Stop Loss:", self.sl_pips_spin)
         
         self.tp_pips_spin = QDoubleSpinBox()
-        self.tp_pips_spin.setRange(1, 1000)
-        self.tp_pips_spin.setValue(100)
+        self.tp_pips_spin.setRange(0, 1000)
+        self.tp_pips_spin.setValue(self.ea.config.take_profit_pips)
         self.tp_pips_spin.setSuffix(" pips")
-        risk_layout.addRow("Take Profit:", self.tp_pips_spin)
+        layout.addRow("Take Profit:", self.tp_pips_spin)
         
-        layout.addWidget(risk_group)
-        
-        # Trailing Stop
-        trailing_group = QGroupBox("Trailing Stop")
-        trailing_layout = QFormLayout(trailing_group)
+        return group
+    
+    def _create_trailing_stop(self):
+        """Create trailing stop section."""
+        group = QGroupBox("Trailing Stop")
+        layout = QFormLayout(group)
         
         self.use_trailing = QCheckBox("Enable Trailing Stop")
-        trailing_layout.addRow("", self.use_trailing)
+        self.use_trailing.setChecked(self.ea.config.use_trailing_stop)
+        layout.addRow("", self.use_trailing)
         
         self.trailing_pips_spin = QDoubleSpinBox()
         self.trailing_pips_spin.setRange(1, 500)
-        self.trailing_pips_spin.setValue(30)
+        self.trailing_pips_spin.setValue(self.ea.config.trailing_stop_pips)
         self.trailing_pips_spin.setSuffix(" pips")
-        trailing_layout.addRow("Trailing Distance:", self.trailing_pips_spin)
+        layout.addRow("Trailing Distance:", self.trailing_pips_spin)
         
-        layout.addWidget(trailing_group)
-        
-        # Filters
-        filters_group = QGroupBox("Trade Filters")
-        filters_layout = QFormLayout(filters_group)
+        return group
+    
+    def _create_filters(self):
+        """Create filters section."""
+        group = QGroupBox("Trade Filters")
+        layout = QFormLayout(group)
         
         self.enable_time_filter = QCheckBox("Enable Time Filter")
-        filters_layout.addRow("", self.enable_time_filter)
+        self.enable_time_filter.setChecked(self.ea.config.enable_time_filter)
+        layout.addRow("", self.enable_time_filter)
         
         self.start_hour_spin = QSpinBox()
         self.start_hour_spin.setRange(0, 23)
-        self.start_hour_spin.setValue(9)
-        filters_layout.addRow("Trading Start Hour:", self.start_hour_spin)
+        self.start_hour_spin.setValue(self.ea.config.trading_start_hour)
+        layout.addRow("Trading Start Hour:", self.start_hour_spin)
         
         self.end_hour_spin = QSpinBox()
         self.end_hour_spin.setRange(0, 23)
-        self.end_hour_spin.setValue(15)
-        filters_layout.addRow("Trading End Hour:", self.end_hour_spin)
+        self.end_hour_spin.setValue(self.ea.config.trading_end_hour)
+        layout.addRow("Trading End Hour:", self.end_hour_spin)
         
         self.max_spread_spin = QDoubleSpinBox()
         self.max_spread_spin.setRange(0.1, 20)
         self.max_spread_spin.setSingleStep(0.1)
-        self.max_spread_spin.setValue(3.0)
+        self.max_spread_spin.setValue(self.ea.config.max_spread_pips)
         self.max_spread_spin.setSuffix(" pips")
-        filters_layout.addRow("Max Spread:", self.max_spread_spin)
+        layout.addRow("Max Spread:", self.max_spread_spin)
         
         self.max_positions_spin = QSpinBox()
         self.max_positions_spin.setRange(1, 10)
-        self.max_positions_spin.setValue(1)
-        filters_layout.addRow("Max Concurrent Positions:", self.max_positions_spin)
+        self.max_positions_spin.setValue(self.ea.config.max_concurrent_positions)
+        layout.addRow("Max Concurrent Positions:", self.max_positions_spin)
         
-        layout.addWidget(filters_group)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
+        return group
+    
+    def _create_buttons(self):
+        """Create button layout."""
+        layout = QHBoxLayout()
         
         self.save_btn = QPushButton("Save")
-        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.clicked.connect(self._save_config)
         self.save_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
         
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
         self.cancel_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 8px;")
         
-        button_layout.addStretch()
-        button_layout.addWidget(self.save_btn)
-        button_layout.addWidget(self.cancel_btn)
+        layout.addStretch()
+        layout.addWidget(self.save_btn)
+        layout.addWidget(self.cancel_btn)
         
-        layout.addLayout(button_layout)
-        
-    def load_config(self):
-        """Load current configuration into fields."""
-        # Basic
-        self.symbol_edit.setText(self.config.symbol)
-        index = self.timeframe_combo.findText(self.config.timeframe)
-        if index >= 0:
-            self.timeframe_combo.setCurrentIndex(index)
-        
-        # Strategy
-        params = self.config.parameters
-        self.fast_period_spin.setValue(params.get('fast_period', 10))
-        self.slow_period_spin.setValue(params.get('slow_period', 20))
-        ma_type_index = self.ma_type_combo.findText(params.get('ma_type', 'SMA'))
-        if ma_type_index >= 0:
-            self.ma_type_combo.setCurrentIndex(ma_type_index)
-        
-        # Risk
-        self.lot_size_spin.setValue(self.config.lot_size)
-        self.risk_percent_spin.setValue(self.config.risk_percent)
-        self.use_dynamic_sizing.setChecked(self.config.use_dynamic_sizing)
-        self.sl_pips_spin.setValue(self.config.stop_loss_pips)
-        self.tp_pips_spin.setValue(self.config.take_profit_pips)
-        
-        # Trailing
-        self.use_trailing.setChecked(self.config.use_trailing_stop)
-        self.trailing_pips_spin.setValue(self.config.trailing_stop_pips)
-        
-        # Filters
-        self.enable_time_filter.setChecked(self.config.enable_time_filter)
-        self.start_hour_spin.setValue(self.config.trading_start_hour)
-        self.end_hour_spin.setValue(self.config.trading_end_hour)
-        self.max_spread_spin.setValue(self.config.max_spread_pips)
-        self.max_positions_spin.setValue(self.config.max_concurrent_positions)
-        
-    def get_config(self) -> EAConfig:
-        """Get updated configuration."""
-        # Update config with new values
-        self.config.symbol = self.symbol_edit.text().strip()
-        self.config.timeframe = self.timeframe_combo.currentText()
-        
-        # Strategy parameters
-        self.config.parameters = {
-            'fast_period': self.fast_period_spin.value(),
-            'slow_period': self.slow_period_spin.value(),
-            'ma_type': self.ma_type_combo.currentText()
-        }
-        
-        # Risk
-        self.config.lot_size = self.lot_size_spin.value()
-        self.config.risk_percent = self.risk_percent_spin.value()
-        self.config.use_dynamic_sizing = self.use_dynamic_sizing.isChecked()
-        self.config.stop_loss_pips = self.sl_pips_spin.value()
-        self.config.take_profit_pips = self.tp_pips_spin.value()
-        
-        # Trailing
-        self.config.use_trailing_stop = self.use_trailing.isChecked()
-        self.config.trailing_stop_pips = self.trailing_pips_spin.value()
-        
-        # Filters
-        self.config.enable_time_filter = self.enable_time_filter.isChecked()
-        self.config.trading_start_hour = self.start_hour_spin.value()
-        self.config.trading_end_hour = self.end_hour_spin.value()
-        self.config.max_spread_pips = self.max_spread_spin.value()
-        self.config.max_concurrent_positions = self.max_positions_spin.value()
-        
-        return self.config
-        
-    def accept(self):
-        """Validate and accept."""
-        # Validate symbol
-        symbol = self.symbol_edit.text().strip()
-        if not symbol:
-            QMessageBox.warning(self, "Validation Error", "Please enter a symbol.")
-            return
-        
-        # Validate MA periods
-        if self.fast_period_spin.value() >= self.slow_period_spin.value():
-            QMessageBox.warning(
-                self,
-                "Validation Error",
-                "Fast MA period must be less than Slow MA period."
-            )
-            return
-        
-        # Validate time filter
-        if self.enable_time_filter.isChecked():
-            if self.start_hour_spin.value() >= self.end_hour_spin.value():
-                QMessageBox.warning(
-                    self,
-                    "Validation Error",
-                    "Start hour must be before end hour."
-                )
-                return
-        
-        super().accept()
+        return layout
+    
+    def _save_config(self):
+        """Save configuration and close dialog."""
+        try:
+            # Update basic settings
+            self.ea.config.symbol = self.symbol_edit.text().strip()
+            self.ea.config.timeframe = self.timeframe_combo.currentText()
+            
+            # Update strategy parameters dynamically
+            for param_name, widget in self.param_widgets.items():
+                if isinstance(widget, QSpinBox):
+                    self.ea.config.parameters[param_name] = widget.value()
+                elif isinstance(widget, QDoubleSpinBox):
+                    self.ea.config.parameters[param_name] = widget.value()
+                elif isinstance(widget, QCheckBox):
+                    self.ea.config.parameters[param_name] = widget.isChecked()
+                elif isinstance(widget, QLineEdit):
+                    # Try to convert to number if possible
+                    text = widget.text()
+                    try:
+                        self.ea.config.parameters[param_name] = float(text)
+                    except ValueError:
+                        self.ea.config.parameters[param_name] = text
+                elif isinstance(widget, QComboBox):
+                    self.ea.config.parameters[param_name] = widget.currentText()
+            
+            # Update risk management
+            self.ea.config.lot_size = self.lot_size_spin.value()
+            self.ea.config.risk_percent = self.risk_percent_spin.value()
+            self.ea.config.stop_loss_pips = self.sl_pips_spin.value()
+            self.ea.config.take_profit_pips = self.tp_pips_spin.value()
+            
+            # Update trailing stop
+            self.ea.config.use_trailing_stop = self.use_trailing.isChecked()
+            self.ea.config.trailing_stop_pips = self.trailing_pips_spin.value()
+            
+            # Update filters
+            self.ea.config.enable_time_filter = self.enable_time_filter.isChecked()
+            self.ea.config.trading_start_hour = self.start_hour_spin.value()
+            self.ea.config.trading_end_hour = self.end_hour_spin.value()
+            self.ea.config.max_spread_pips = self.max_spread_spin.value()
+            self.ea.config.max_concurrent_positions = self.max_positions_spin.value()
+            
+            # Reinitialize EA with new config
+            self.ea.initialize(self.ea.config)
+            
+            logger.info(f"{self.ea.name}: Configuration updated")
+            
+            self.accept()
+            
+        except Exception as e:
+            logger.error(f"Error saving EA config: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save configuration: {e}")
