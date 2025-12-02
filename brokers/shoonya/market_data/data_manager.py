@@ -103,12 +103,25 @@ class ShoonyaMarketDataManager:
         
         try:
             # Step 1: Parse exchange and get token
-            if ':' in symbol:
-                exchange, clean_symbol = symbol.split(':', 1)
-            else:
-                clean_symbol = symbol
+            exchange = 'NSE'  # Default
+            token = None
+            clean_symbol = symbol
+            
+            # Handle pipe format: MCX|463007 (exchange|token)
+            if '|' in symbol:
+                parts = symbol.split('|', 1)
+                exchange = parts[0]
+                token = parts[1]  # Token already provided
                 
-            token = self.get_token(clean_symbol, exchange)
+            # Handle colon format: MCX:SYMBOL (exchange:symbol name)  
+            elif ':' in symbol:
+                parts = symbol.split(':', 1)
+                exchange = parts[0]
+                clean_symbol = parts[1]
+                token = self.get_token(clean_symbol, exchange)
+            else:
+                token = self.get_token(clean_symbol, exchange)
+                
             if not token:
                 logger.warning(f"Could not find token for {symbol}")
                 return None
@@ -174,17 +187,31 @@ class ShoonyaMarketDataManager:
             
         try:
             # 1. Get token
-            # Parse exchange from symbol if present
-            if ':' in symbol:
-                exchange, clean_symbol = symbol.split(':', 1)
+            # Parse exchange and token from symbol
+            exchange = 'NSE'  # Default
+            token = None
+            clean_symbol = symbol
+            
+            # Handle pipe format: MCX|463007 (exchange|token)
+            if '|' in symbol:
+                parts = symbol.split('|', 1)
+                exchange = parts[0]
+                token = parts[1]  # Token is already provided!
+                logger.info(f"Using token from symbol: {exchange}|{token}")
+                
+            # Handle colon format: MCX:NATURALGAS26DEC25 (exchange:symbol name)
+            elif ':' in symbol:
+                parts = symbol.split(':', 1)
+                exchange = parts[0]
+                clean_symbol = parts[1]
+                token = self.get_token(clean_symbol, exchange)
+                
+            # No format specified - try to get token
             else:
-                # Fallback logic
-                exchange = 'NSE' 
                 if 'BSE' in symbol:
                     exchange = 'BSE'
-                clean_symbol = symbol
+                token = self.get_token(clean_symbol, exchange)
                 
-            token = self.get_token(clean_symbol, exchange)
             if not token:
                 logger.warning(f"Could not find token for {symbol}")
                 return []
