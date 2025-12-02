@@ -311,27 +311,11 @@ class EAControlPanel(QWidget):
                 )
                 return
         
-        # Get current config
-        config = ea.get_config()
-        
-        if not config:
-            QMessageBox.warning(self, "No Configuration", "EA has no configuration.")
-            return
-        
-        # Show dialog
-        dialog = EAConfigDialog(config, self)
+        # Show dialog with EA object (not config)
+        dialog = EAConfigDialog(ea, self)
         
         if dialog.exec_() == dialog.Accepted:
-            # Get updated config
-            new_config = dialog.get_config()
-            
-            # Update EA
-            ea.update_config(new_config)
-            
-            # Re-initialize EA with new config
-            ea.initialize(new_config)
-            
-            # Refresh UI
+            # Config already updated inside dialog
             self.refresh_table()
             
             QMessageBox.information(

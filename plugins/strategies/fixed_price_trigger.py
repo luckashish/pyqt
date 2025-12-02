@@ -21,23 +21,27 @@ class FixedPriceTriggerEA(ExpertAdvisor):
     Simple threshold-based trading.
     """
     
-    def __init__(self, config: EAConfig):
+    def __init__(self):
         super().__init__()
         
-        # Set config
-        self.config = config
-        self.name = config.name
+        # EA Info
+        self.name = "Fixed Price Trigger EA"
+        self.version = "1.0"
+        self.author = "System"
+        self.description = "Simple price threshold trigger EA"
         
-        # Get trigger price from parameters
-        self.trigger_price = config.parameters.get('trigger_price', 100.0)
+        # Default trigger price (will be set from config)
+        self.trigger_price = 100.0
         
         # Track current position state
         self.current_position = None  # None, 'BUY', or 'SELL'
-        
-        logger.info(f"{self.name}: Initialized with trigger price {self.trigger_price}")
     
     def on_init(self):
         """Called when EA is first initialized."""
+        # Get trigger price from config parameters
+        if self.config and self.config.parameters:
+            self.trigger_price = self.config.parameters.get('trigger_price', 100.0)
+        
         logger.info(f"{self.name}: Initializing...")
         logger.info(f"  Symbol: {self.config.symbol}")
         logger.info(f"  Trigger Price: {self.trigger_price}")
@@ -60,7 +64,7 @@ class FixedPriceTriggerEA(ExpertAdvisor):
         Args:
             symbol: Current tick data
         """
-        if not self.is_running():
+        if not self.is_running:
             return
         
         # Get current price
@@ -70,25 +74,54 @@ class FixedPriceTriggerEA(ExpertAdvisor):
             return
         
         # Check for signal based on trigger price
-        signal = None
         
-        # Price above trigger → BUY signal
+        # Price above trigger -> BUY signal
         if current_price > self.trigger_price:
             if self.current_position != 'BUY':
-                logger.info(f"{self.name}: Price {current_price} > {self.trigger_price} → BUY SIGNAL")
-                signal = self._create_buy_signal(symbol, current_price)
+                logger.info(f"{self.name}: Price {current_price} > {self.trigger_price} -> BUY SIGNAL")
+                
+                # Calculate SL/TP
+                sl_distance = self.config.stop_loss_pips
+                tp_distance = self.config.take_profit_pips or (sl_distance * 2)
+                
+                stop_loss = current_price - sl_distance
+                take_profit = current_price + tp_distance
+                
+                # Generate signal
+                self.generate_signal(
+                    signal_type='BUY',
+                    price=current_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    reason=f"Price {current_price} crossed above trigger {self.trigger_price}",
+                    confidence=1.0
+                )
+                
                 self.current_position = 'BUY'
         
-        # Price below trigger → SELL signal
+        # Price below trigger -> SELL signal
         elif current_price < self.trigger_price:
             if self.current_position != 'SELL':
-                logger.info(f"{self.name}: Price {current_price} < {self.trigger_price} → SELL SIGNAL")
-                signal = self._create_sell_signal(symbol, current_price)
+                logger.info(f"{self.name}: Price {current_price} < {self.trigger_price} -> SELL SIGNAL")
+                
+                # Calculate SL/TP
+                sl_distance = self.config.stop_loss_pips
+                tp_distance = self.config.take_profit_pips or (sl_distance * 2)
+                
+                stop_loss = current_price + sl_distance
+                take_profit = current_price - tp_distance
+                
+                # Generate signal
+                self.generate_signal(
+                    signal_type='SELL',
+                    price=current_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    reason=f"Price {current_price} crossed below trigger {self.trigger_price}",
+                    confidence=1.0
+                )
+                
                 self.current_position = 'SELL'
-        
-        # Emit signal if generated
-        if signal:
-            self.emit_signal(signal)
     
     def handle_bar(self, bar):
         """
@@ -106,68 +139,6 @@ class FixedPriceTriggerEA(ExpertAdvisor):
             order: Updated order
         """
         logger.info(f"{self.name}: Order update - {order.ticket} {order.status}")
-    
-    def _create_buy_signal(self, symbol: Symbol, price: float) -> EASignal:
-        """
-        Create a BUY signal.
-        
-        Args:
-            symbol: Current symbol data
-            price: Entry price
-            
-        Returns:
-            EASignal for BUY
-        """
-        # Calculate SL/TP
-        sl_distance = self.config.stop_loss_pips
-        tp_distance = self.config.take_profit_pips or (sl_distance * 2)  # Default 1:2 R:R
-        
-        stop_loss = price - sl_distance
-        take_profit = price + tp_distance
-        
-        return EASignal(
-            ea_name=self.name,
-            symbol=self.config.symbol,
-            signal_type='BUY',
-            timestamp=datetime.now(),
-            price=price,
-            volume=self.config.lot_size,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            reason=f"Price {price} crossed above trigger {self.trigger_price}",
-            confidence=1.0
-        )
-    
-    def _create_sell_signal(self, symbol: Symbol, price: float) -> EASignal:
-        """
-        Create a SELL signal.
-        
-        Args:
-            symbol: Current symbol data
-            price: Entry price
-            
-        Returns:
-            EASignal for SELL
-        """
-        # Calculate SL/TP
-        sl_distance = self.config.stop_loss_pips
-        tp_distance = self.config.take_profit_pips or (sl_distance * 2)  # Default 1:2 R:R
-        
-        stop_loss = price + sl_distance
-        take_profit = price - tp_distance
-        
-        return EASignal(
-            ea_name=self.name,
-            symbol=self.config.symbol,
-            signal_type='SELL',
-            timestamp=datetime.now(),
-            price=price,
-            volume=self.config.lot_size,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            reason=f"Price {price} crossed below trigger {self.trigger_price}",
-            confidence=1.0
-        )
 
 
 def create_fixed_price_trigger_ea(
@@ -190,6 +161,10 @@ def create_fixed_price_trigger_ea(
     Returns:
         Configured FixedPriceTriggerEA instance
     """
+    # Create EA instance (no args)
+    ea = FixedPriceTriggerEA()
+    
+    # Create config
     config = EAConfig(
         name="Fixed Price Trigger EA",
         symbol=symbol,
@@ -209,4 +184,8 @@ def create_fixed_price_trigger_ea(
         max_spread_pips=10.0
     )
     
-    return FixedPriceTriggerEA(config)
+    # Initialize EA with config
+    ea.initialize(config)
+    
+    return ea
+
