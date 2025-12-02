@@ -22,7 +22,11 @@ class FixedPriceTriggerEA(ExpertAdvisor):
     """
     
     def __init__(self, config: EAConfig):
-        super().__init__(config)
+        super().__init__()
+        
+        # Set config
+        self.config = config
+        self.name = config.name
         
         # Get trigger price from parameters
         self.trigger_price = config.parameters.get('trigger_price', 100.0)
