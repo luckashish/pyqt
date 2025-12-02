@@ -42,6 +42,7 @@ from core.position_tracker import position_tracker
 from plugins.strategies.ma_crossover import create_ma_crossover_ea
 from plugins.strategies.bullish_breakout import create_bullish_breakout_ea
 from plugins.strategies.bearish_breakout import create_bearish_breakout_ea
+from plugins.strategies.fixed_price_trigger import create_fixed_price_trigger_ea
 
 
 class MainWindow(QMainWindow):
@@ -167,6 +168,10 @@ class MainWindow(QMainWindow):
         start_bearish_ea_action = QAction("Start Bearish Breakout EA", self)
         start_bearish_ea_action.triggered.connect(self._start_bearish_breakout_ea)
         ea_submenu.addAction(start_bearish_ea_action)
+        
+        start_trigger_ea_action = QAction("Start Fixed Price Trigger EA", self)
+        start_trigger_ea_action.triggered.connect(self._start_fixed_price_trigger_ea)
+        ea_submenu.addAction(start_trigger_ea_action)
         
         ea_submenu.addAction("Stop All EAs").triggered.connect(lambda: ea_manager.stop_all())
         
@@ -902,6 +907,17 @@ class MainWindow(QMainWindow):
             )
             
             ea_manager.register_ea(bearish_ea)
+            
+            # Create and register Fixed Price Trigger EA
+            trigger_ea = create_fixed_price_trigger_ea(
+                symbol="MCX|463007",
+                trigger_price=440.0,  # Price threshold
+                lot_size=1,
+                stop_loss_pips=10,
+                take_profit_pips=20
+            )
+            
+            ea_manager.register_ea(trigger_ea)
             
             # Refresh EA panel
             self.ea_panel.refresh_table()
