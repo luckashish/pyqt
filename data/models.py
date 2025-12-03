@@ -50,6 +50,7 @@ class Symbol:
     bid: float = 0.0
     ask: float = 0.0
     last: float = 0.0
+    open: float = 0.0
     high: float = 0.0
     low: float = 0.0
     close: float = 0.0

@@ -1,10 +1,12 @@
 from PyQt5.QtWidgets import (
     QDockWidget, QTabWidget, QTableWidget, QTableWidgetItem, 
-    QLabel, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStatusBar
+    QLabel, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStatusBar,
+    QTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QColor
 from utils.worker_threads import OrderBookWorker, PositionBookWorker
+from datetime import datetime
 
 class Terminal(QDockWidget):
     """Terminal dock widget."""
@@ -39,15 +41,6 @@ class Terminal(QDockWidget):
         self.trade_table.setAlternatingRowColors(True)
         self.terminal_tabs.addTab(self.trade_table, "Trade")
         
-        # History tab
-        self.history_table = QTableWidget(0, 10)
-        self.history_table.setHorizontalHeaderLabels([
-            "Symbol", "Ticket", "Time", "Type", "Volume", "Price", "S/L", "T/P", "Close Price", "Profit"
-        ])
-        self.history_table.horizontalHeader().setStretchLastSection(True)
-        self.history_table.setAlternatingRowColors(True)
-        self.terminal_tabs.addTab(self.history_table, "History")
-        
         # News tab
         news_widget = QLabel("Market News Feed\n\nFed Holds Interest Rates Steady - Reuters\nECB Signals Potential Rate Cut - Bloomberg\n...")
         news_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -66,11 +59,12 @@ class Terminal(QDockWidget):
         self.terminal_tabs.addTab(alerts_widget, "Alerts")
         
         # Journal tab
-        journal_widget = QLabel("System Journal\n\n[INFO] Application started\n[INFO] Connected to Demo Server\n...")
-        journal_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        journal_widget.setWordWrap(True)
-        journal_widget.setStyleSheet("font-family: monospace;")
-        self.terminal_tabs.addTab(journal_widget, "Journal")
+        self.journal_widget = QTextEdit()
+        self.journal_widget.setReadOnly(True)
+        self.journal_widget.setStyleSheet("font-family: monospace; background-color: #1e1e1e; color: #d4d4d4;")
+        self.journal_widget.append(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] Application started")
+        self.journal_widget.append(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] Connected to Demo Server")
+        self.terminal_tabs.addTab(self.journal_widget, "Journal")
         
         # Order Book tab
         self.order_book_tab = self._create_order_book_tab()
@@ -235,24 +229,7 @@ class Terminal(QDockWidget):
             profit_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.trade_table.setItem(row, 8, profit_item)
             
-    def update_history_table(self):
-        """Update History (closed trades) table."""
-        orders = self.broker.get_order_history()
-        self.history_table.setRowCount(len(orders))
-        
-        for row, order in enumerate(orders[-50:]):  # Show last 50
-            profit = order.calculate_profit(order.close_price or order.open_price)
-            
-            self.history_table.setItem(row, 0, QTableWidgetItem(order.symbol))
-            self.history_table.setItem(row, 1, QTableWidgetItem(str(order.ticket)))
-            self.history_table.setItem(row, 2, QTableWidgetItem(order.open_time.strftime("%Y.%m.%d %H:%M")))
-            self.history_table.setItem(row, 3, QTableWidgetItem(order.order_type.value))
-            self.history_table.setItem(row, 4, QTableWidgetItem(f"{order.volume:.2f}"))
-            self.history_table.setItem(row, 5, QTableWidgetItem(f"{order.open_price:.5f}"))
-            self.history_table.setItem(row, 6, QTableWidgetItem(f"{order.sl:.5f}" if order.sl > 0 else "0.00000"))
-            self.history_table.setItem(row, 7, QTableWidgetItem(f"{order.tp:.5f}" if order.tp > 0 else "0.00000"))
-            self.history_table.setItem(row, 8, QTableWidgetItem(f"{order.close_price:.5f}" if order.close_price else ""))
-            
+
     def update_account_info(self, account_info: dict):
         """Update account info bar."""
         self.balance_label.setText(f"Balance: {account_info['balance']:,.2f} USD")
@@ -266,6 +243,15 @@ class Terminal(QDockWidget):
             self.margin_level_label.setStyleSheet("color: #f44336; font-weight: bold;")
         else:
             self.margin_level_label.setStyleSheet("")
+
+    def log_message(self, message: str):
+        """Log a message to the Journal tab."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.journal_widget.append(f"[{timestamp}] {message}")
+        # Scroll to bottom
+        cursor = self.journal_widget.textCursor()
+        cursor.movePosition(cursor.End)
+        self.journal_widget.setTextCursor(cursor)
 
     def _create_position_book_tab(self):
         """Create Position Book tab widget."""

@@ -5,12 +5,14 @@ Allows editing EA parameters, symbol, and risk settings.
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QComboBox, QSpinBox,
-    QDoubleSpinBox, QCheckBox, QGroupBox, QMessageBox
+    QDoubleSpinBox, QCheckBox, QGroupBox, QMessageBox,
+    QTimeEdit
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTime
 
 from core.ea_base import ExpertAdvisor
 from utils.logger import logger
+from datetime import datetime, timedelta
 
 
 class EAConfigDialog(QDialog):
@@ -76,15 +78,84 @@ class EAConfigDialog(QDialog):
         group = QGroupBox("Strategy Parameters")
         layout = QFormLayout(group)
         
-        # Dynamically create parameter fields
+        # Track processed parameters to avoid duplicates
+        processed_params = set()
+        
         if self.ea.config.parameters:
-            for param_name, param_value in self.ea.config.parameters.items():
+            # Convert to list to access by index if needed, though dict is ordered
+            params = self.ea.config.parameters
+            
+            for param_name, param_value in params.items():
+                if param_name in processed_params:
+                    continue
+                
+                # Dynamic default for target_time
+                if param_name == 'target_time':
+                    # Set to system time + 1 minute
+                    future_time = datetime.now() + timedelta(minutes=1)
+                    
+                    # Create QTimeEdit
+                    widget = QTimeEdit()
+                    widget.setDisplayFormat("HH:mm")
+                    widget.setTime(QTime(future_time.hour, future_time.minute))
+                    
+                    self.param_widgets[param_name] = widget
+                    
+                    display_name = param_name.replace('_', ' ').title() + ":"
+                    layout.addRow(display_name, widget)
+                    processed_params.add(param_name)
+                    continue
+                
+                # Check for "enable_" pattern
+                if param_name.startswith("enable_") and isinstance(param_value, bool):
+                    # Try to find corresponding parameter (e.g. enable_buy -> buy_level)
+                    base_name = param_name.replace("enable_", "")
+                    target_param = None
+                    
+                    # Look for likely matches
+                    candidates = [f"{base_name}_level", f"{base_name}_price", base_name]
+                    for candidate in candidates:
+                        if candidate in params:
+                            target_param = candidate
+                            break
+                    
+                    if target_param:
+                        # Found a pair! Create a group
+                        sub_group = QGroupBox(f"{base_name.title()} Settings")
+                        sub_layout = QFormLayout(sub_group)
+                        
+                        # Checkbox (Enable)
+                        checkbox = self._create_param_widget(param_name, param_value)
+                        self.param_widgets[param_name] = checkbox
+                        sub_layout.addRow(f"Enable {base_name.title()}", checkbox)
+                        
+                        # Value Widget
+                        target_value = params[target_param]
+                        widget = self._create_param_widget(target_param, target_value)
+                        self.param_widgets[target_param] = widget
+                        
+                        # Disable input if checkbox is unchecked
+                        widget.setEnabled(param_value)
+                        checkbox.toggled.connect(widget.setEnabled)
+                        
+                        display_name = target_param.replace('_', ' ').title() + ":"
+                        sub_layout.addRow(display_name, widget)
+                        
+                        layout.addRow(sub_group)
+                        
+                        # Mark both as processed
+                        processed_params.add(param_name)
+                        processed_params.add(target_param)
+                        continue
+
+                # Default handling for non-grouped parameters
                 widget = self._create_param_widget(param_name, param_value)
                 self.param_widgets[param_name] = widget
                 
-                # Format parameter name for display
                 display_name = param_name.replace('_', ' ').title() + ":"
                 layout.addRow(display_name, widget)
+                processed_params.add(param_name)
+                
         else:
             no_params_label = QLabel("This EA has no custom parameters")
             no_params_label.setStyleSheet("color: gray; font-style: italic;")
@@ -94,8 +165,14 @@ class EAConfigDialog(QDialog):
     
     def _create_param_widget(self, param_name: str, param_value):
         """Create appropriate widget for parameter based on its type."""
+        # Boolean parameters (Must be checked before int because bool is subclass of int)
+        if isinstance(param_value, bool):
+            widget = QCheckBox()
+            widget.setChecked(param_value)
+            return widget
+            
         # Integer parameters
-        if isinstance(param_value, int):
+        elif isinstance(param_value, int):
             widget = QSpinBox()
             widget.setRange(-10000, 10000)
             widget.setValue(param_value)
@@ -107,12 +184,6 @@ class EAConfigDialog(QDialog):
             widget.setRange(-10000.0, 10000.0)
             widget.setDecimals(2)
             widget.setValue(param_value)
-            return widget
-        
-        # Boolean parameters
-        elif isinstance(param_value, bool):
-            widget = QCheckBox()
-            widget.setChecked(param_value)
             return widget
         
         # String parameters  
@@ -245,6 +316,8 @@ class EAConfigDialog(QDialog):
                         self.ea.config.parameters[param_name] = text
                 elif isinstance(widget, QComboBox):
                     self.ea.config.parameters[param_name] = widget.currentText()
+                elif isinstance(widget, QTimeEdit):
+                    self.ea.config.parameters[param_name] = widget.time().toString("HH:mm")
             
             # Update risk management
             self.ea.config.lot_size = self.lot_size_spin.value()

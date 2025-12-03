@@ -25,6 +25,7 @@ from plugins.strategies.ma_crossover import create_ma_crossover_ea
 from plugins.strategies.bullish_breakout import create_bullish_breakout_ea
 from plugins.strategies.bearish_breakout import create_bearish_breakout_ea
 from plugins.strategies.fixed_price_trigger import create_fixed_price_trigger_ea
+from plugins.strategies.time_based_breakout import create_time_based_ea
 
 # New Managers
 from ui.main_window_ui import MainWindowUI
@@ -134,6 +135,8 @@ class MainWindow(QMainWindow):
             elif plugin_type == "Strategy":
                 if "MA Crossover" in plugin_name:
                     self._start_ma_crossover_ea()
+                elif "Time Based" in plugin_name:
+                    self._start_time_based_ea()
                 else:
                     QMessageBox.information(self, "Strategy", f"Strategy '{plugin_name}' selected.")
         except Exception as e:
@@ -236,7 +239,7 @@ class MainWindow(QMainWindow):
         """Handle order closed."""
         logger.info(f"Order closed: {order.ticket}")
         self.ui.terminal.update_trade_table()
-        self.ui.terminal.update_history_table()
+
         self.ui.status_bar.showMessage(f"Order {order.ticket} closed", 3000)
     
     @pyqtSlot(dict)
@@ -323,7 +326,12 @@ class MainWindow(QMainWindow):
             execution_service.set_broker(self.broker)
             execution_service.set_paper_trading(True)
             
+            try:
+                ea_manager.signal_generated.disconnect(self._on_ea_signal)
+            except TypeError:
+                pass  # Not connected
             ea_manager.signal_generated.connect(self._on_ea_signal)
+            
             ea_manager.ea_started.connect(lambda name: self.ui.status_bar.showMessage(f"EA Started: {name}", 3000))
             ea_manager.ea_stopped.connect(lambda name: self.ui.status_bar.showMessage(f"EA Stopped: {name}", 3000))
             ea_manager.ea_error.connect(self._on_ea_error)
@@ -347,6 +355,9 @@ class MainWindow(QMainWindow):
             trigger_ea = create_fixed_price_trigger_ea("MCX|463007", 440.0, 1, 10, 20)
             ea_manager.register_ea(trigger_ea)
             
+            time_ea = create_time_based_ea("MCX|463007", "10:33 pm", True, 404.0, True, 400.0, 1, 10, 20)
+            ea_manager.register_ea(time_ea)
+            
             self.ui.ea_panel.refresh_table()
             logger.info("EA system initialized successfully")
             
@@ -365,6 +376,9 @@ class MainWindow(QMainWindow):
         
     def _start_fixed_price_trigger_ea(self):
         self._start_ea("Fixed Price Trigger EA")
+        
+    def _start_time_based_ea(self):
+        self._start_ea("Time Based Breakout EA")
         
     def _start_ea(self, ea_name):
         """Generic helper to start an EA."""
@@ -386,6 +400,13 @@ class MainWindow(QMainWindow):
 
     def _on_ea_signal(self, signal):
         logger.info(f"EA Signal: {signal.ea_name} - {signal.signal_type} @ {signal.price}")
+        
+        # Log to Journal
+        log_msg = f"[EA] {signal.ea_name}: {signal.signal_type} {signal.symbol} @ {signal.price}"
+        if hasattr(signal, 'sl') and signal.sl: log_msg += f" SL={signal.sl}"
+        if hasattr(signal, 'tp') and signal.tp: log_msg += f" TP={signal.tp}"
+        self.ui.terminal.log_message(log_msg)
+        
         self.ui.status_bar.showMessage(f"{signal.ea_name}: {signal.signal_type} {signal.symbol} @ {signal.price}", 5000)
         event_bus.ea_signal_generated.emit(signal)
     

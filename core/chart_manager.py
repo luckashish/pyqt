@@ -19,7 +19,7 @@ class ChartManager:
 
     def create_default_charts(self):
         """Create default charts on startup."""
-        for symbol in ["EURUSD.H1", "GBPUSD.H1", "USDJPY.H1", "USDCHF.H1", "SBIN-EQ"]:
+        for symbol in ["SBIN-EQ"]:
             chart_widget = self._create_chart_widget(symbol)
             self.main_window.ui.chart_tabs.addTab(chart_widget, symbol)
 
@@ -199,12 +199,12 @@ class ChartManager:
 
     def update_tick(self, symbol):
         """Update charts with new tick data."""
-        # logger.info(f"ChartManager received tick for {symbol.name}: {symbol.last}")
+        #logger.info(f"ChartManager received tick for {symbol.name}: {symbol.last}")
         
         # Check if we have any charts for this symbol
         if symbol.name in self.charts:
             # logger.info(f"Updating chart for {symbol.name} with price {symbol.last}")
             self.charts[symbol.name].update_tick(symbol)
         else:
-            # logger.debug(f"No chart found for {symbol.name}. Active charts: {list(self.charts.keys())}")
+            logger.debug(f"No chart found for {symbol.name}. Active charts: {list(self.charts.keys())}")
             pass

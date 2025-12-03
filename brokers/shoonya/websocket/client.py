@@ -199,17 +199,44 @@ class ShoonyaWebSocketClient:
             pipe_format = f"{exchange}|{token}"
             trading_symbol = tick_data.get('ts', '')
             
+            # Get existing symbol state to handle partial updates
+            existing_symbol = feed_manager.get_symbol(pipe_format)
+            
+            # Default values from existing symbol or 0.0
+            bid = existing_symbol.bid if existing_symbol else 0.0
+            ask = existing_symbol.ask if existing_symbol else 0.0
+            last = existing_symbol.last if existing_symbol else 0.0
+            high = existing_symbol.high if existing_symbol else 0.0
+            low = existing_symbol.low if existing_symbol else 0.0
+            close = existing_symbol.close if existing_symbol else 0.0
+            volume = existing_symbol.volume if existing_symbol else 0
+            open_price = existing_symbol.open if existing_symbol else 0.0
+            
+            # Update with new data if available
+            if 'bp1' in tick_data: bid = float(tick_data['bp1'])
+            if 'sp1' in tick_data: ask = float(tick_data['sp1'])
+            if 'lp' in tick_data: last = float(tick_data['lp'])
+            if 'h' in tick_data: high = float(tick_data['h'])
+            if 'l' in tick_data: low = float(tick_data['l'])
+            if 'c' in tick_data: close = float(tick_data['c'])
+            if 'v' in tick_data: volume = int(tick_data['v'])
+            if 'o' in tick_data: open_price = float(tick_data['o'])
+            
+            # For indices, Bid/Ask might be 0, which is normal.
+            # But for stocks, this merge prevents 0.0 overwrites on partial updates.
+            
             symbol = Symbol(
                 name=pipe_format,  # Use pipe format as primary name
-                display_name=symbol_name,  # Colon format for display and matching
+                display_name=symbol_name if symbol_name else (existing_symbol.display_name if existing_symbol else pipe_format),
                 bid=bid,
                 ask=ask,
                 last=last,
+                open=open_price,
                 high=high,
                 low=low,
                 close=close,
                 volume=volume,
-                description=trading_symbol
+                description=trading_symbol if trading_symbol else (existing_symbol.description if existing_symbol else "")
             )
             
             # Push to Feed Manager

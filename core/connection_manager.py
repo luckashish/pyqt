@@ -80,7 +80,7 @@ class ConnectionManager:
             self.main_window.ui.connection_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         
         # Subscribe to default symbols for testing
-        test_symbols = ["MCX|463007", "NSE|22", "NSE|26000", "NSE|26009"] # NATURALGAS ACC, Nifty 50, Bank Nifty, Reliance
+        test_symbols = ["MCX|463007", "NSE|22"] # NATURALGAS ACC, Nifty 50, Bank Nifty, Reliance
         self.broker.subscribe(test_symbols)
         
         # Setup autocomplete for Market Watch
