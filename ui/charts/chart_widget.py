@@ -213,15 +213,33 @@ class ChartWidget(QWidget):
         Update chart with new tick data.
         tick_data: Symbol object or dict with 'last_price', 'timestamp'
         """
-        if not self.data:
-            return
-            
-        print(f"Chart update_tick: {tick_data.last}")
-        last_candle = self.data[-1]
         price = tick_data.last
+        # print(f"Chart update_tick: {price}")
         
         if price <= 0:
             return
+
+        if not self.data:
+            # Initialize with first candle if no data exists
+            from data.models import OHLCData
+            current_time = datetime.now()
+            
+            # Create first candle
+            new_candle = OHLCData(
+                timestamp=current_time,
+                open=price,
+                high=price,
+                low=price,
+                close=price,
+                volume=0
+            )
+            self.data = [new_candle]
+            
+            # Initialize plot
+            self.update_chart(self.data)
+            return
+        
+        last_candle = self.data[-1]
         
         # Check if we need a new candle
         # Simple time check based on timeframe

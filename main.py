@@ -4,45 +4,33 @@ A comprehensive trading platform built with PyQt5
 """
 import sys
 import os
-from datetime import datetime, timedelta
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QDockWidget, QTabWidget, 
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, 
-    QTreeWidgetItem, QPushButton, QMenuBar, QMenu, QAction, 
-    QToolBar, QStatusBar, QSplitter, QMessageBox, QDialog
-)
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QModelIndex
-from PyQt5.QtGui import QIcon, QColor, QFont
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
+from PyQt5.QtCore import pyqtSlot
 
 # Import our modules
 from utils.config_manager import config
 from utils.logger import logger
 from core.event_bus import event_bus
-from core.feed_manager import feed_manager
 from brokers.factory import broker_factory
 from brokers.registry import register_builtin_brokers
 
 from data.models import Symbol, Order
-from utils.worker_threads import BrokerConnectionWorker, QuoteUpdateWorker, HistoricalDataWorker
-
-# UI Modules
-from ui.market_watch import MarketWatch
-from ui.navigator import Navigator
-from ui.terminal import Terminal
 from ui.order_dialog import OrderDialog
-from ui.indicator_dialog import IndicatorDialog
-from ui.ea_control_panel import EAControlPanel
-from core.plugin_manager import plugin_manager
 
 # EA System
 from core.ea_manager import ea_manager
 from core.execution_service import execution_service
-from core.risk_manager import risk_manager
 from core.position_tracker import position_tracker
 from plugins.strategies.ma_crossover import create_ma_crossover_ea
 from plugins.strategies.bullish_breakout import create_bullish_breakout_ea
 from plugins.strategies.bearish_breakout import create_bearish_breakout_ea
 from plugins.strategies.fixed_price_trigger import create_fixed_price_trigger_ea
+
+# New Managers
+from ui.main_window_ui import MainWindowUI
+from core.chart_manager import ChartManager
+from core.connection_manager import ConnectionManager
+from core.plugin_manager import plugin_manager
 
 
 class MainWindow(QMainWindow):
@@ -65,547 +53,77 @@ class MainWindow(QMainWindow):
         # Create broker instance (now config is loaded!)
         self.broker = broker_factory.create_broker()  # Uses config.yaml
         
-        # CRITICAL: Connect candle_updated events to EA Manager for bar-based strategies
-        logger.info("Connecting candle_updated to EA Manager...")
-        event_bus.candle_updated.connect(lambda symbol, bar: ea_manager.on_bar(symbol, bar))
-        logger.info("[OK] Event bus connected - EAs will receive bar close events")
+        # Initialize Managers
+        self.ui = MainWindowUI(self)
+        self.chart_manager = ChartManager(self, self.broker)
+        self.connection_manager = ConnectionManager(self, self.broker)
         
         # Initialize UI
-        self._init_ui()
+        self.ui.init_ui(self.broker)
         
-        # Connect to broker
-        self._connect_broker()
-        
-        # Load Plugins
-        self._load_plugins()
-        
-        # Setup update timers
-        self._setup_timers()
-    
-    def _init_ui(self):
-        """Initialize the user interface."""
-        # Create menu bar
-        self._create_menu_bar()
-        
-        # Create toolbar
-        self._create_toolbar()
-        
-        # Create central widget (chart area)
-        self._create_chart_area()
-        
-        # Create Market Watch dock (left)
-        self.market_watch = MarketWatch(self)
-        self.market_watch.symbol_double_clicked.connect(self._fetch_chart_data)
-        self.market_watch.symbol_added.connect(self._on_symbol_added)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.market_watch)
-        
-        # Create Navigator dock (left, below market watch)
-        self._create_navigator()
-        
-        # Create Terminal dock (bottom)
-        self.terminal = Terminal(self.broker, self)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal)
-        
-        # Create EA Control Panel dock (right)
-        self.ea_panel = EAControlPanel(self)
-        ea_dock = QDockWidget("Expert Advisors", self)
-        ea_dock.setWidget(self.ea_panel)
-        self.addDockWidget(Qt.RightDockWidgetArea, ea_dock)
-        
-        # Create status bar
-        self._create_status_bar()
-        
-        # Apply stylesheet
-        self._apply_stylesheet()
-        
-        logger.info("UI initialized successfully")
-    
-    def _create_menu_bar(self):
-        """Create menu bar."""
-        menubar = self.menuBar()
-        
-        # File menu
-        file_menu = menubar.addMenu("File")
-        new_chart_action = QAction("New Chart", self)
-        file_menu.addAction(new_chart_action)
-        file_menu.addSeparator()
-        exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-        
-        # View menu
-        view_menu = menubar.addMenu("View")
-        view_menu.addAction("Market Watch")
-        view_menu.addAction("Navigator")
-        view_menu.addAction("Terminal")
-        
-        # Insert menu
-        insert_menu = menubar.addMenu("Insert")
-        insert_menu.addAction("Indicators")
-        insert_menu.addAction("Objects")
-        
-        # Charts menu
-        charts_menu = menubar.addMenu("Charts")
-        charts_menu.addAction("Templates")
-        charts_menu.addAction("Refresh")
-        
-        # Tools menu
-        tools_menu = menubar.addMenu("Tools")
-        tools_menu.addAction("Options")
-        tools_menu.addAction("MetaQuotes Language Editor")
-        tools_menu.addSeparator()
-        
-        # EA sub-menu
-        ea_submenu = tools_menu.addMenu("Expert Advisors")
-        start_ma_ea_action = QAction("Start MA Crossover EA", self)
-        start_ma_ea_action.triggered.connect(self._start_ma_crossover_ea)
-        ea_submenu.addAction(start_ma_ea_action)
-        
-        start_breakout_ea_action = QAction("Start Bullish Breakout EA", self)
-        start_breakout_ea_action.triggered.connect(self._start_bullish_breakout_ea)
-        ea_submenu.addAction(start_breakout_ea_action)
-        
-        start_bearish_ea_action = QAction("Start Bearish Breakout EA", self)
-        start_bearish_ea_action.triggered.connect(self._start_bearish_breakout_ea)
-        ea_submenu.addAction(start_bearish_ea_action)
-        
-        start_trigger_ea_action = QAction("Start Fixed Price Trigger EA", self)
-        start_trigger_ea_action.triggered.connect(self._start_fixed_price_trigger_ea)
-        ea_submenu.addAction(start_trigger_ea_action)
-        
-        ea_submenu.addAction("Stop All EAs").triggered.connect(lambda: ea_manager.stop_all())
-        
-        tools_menu.addSeparator()
-        
-        clear_cache_action = QAction("Clear Cache", self)
-        clear_cache_action.setStatusTip("Clear application cache and temporary files")
-        clear_cache_action.triggered.connect(self._on_clear_cache)
-        tools_menu.addAction(clear_cache_action)
-        
-        # Window menu
-        window_menu = menubar.addMenu("Window")
-        window_menu.addAction("Tile Windows")
-        window_menu.addAction("Cascade Windows")
-        
-        # Help menu
-        help_menu = menubar.addMenu("Help")
-        help_menu.addAction("Help Topics")
-        help_menu.addAction("About")
-    
-    def _create_toolbar(self):
-        """Create main toolbar."""
-        toolbar = QToolBar("Main Toolbar")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
-        
-        # Add toolbar buttons (using text since we don't have icons)
-        new_order_btn = QPushButton("New Order")
-        new_order_btn.setToolTip("Open new order dialog")
-        new_order_btn.clicked.connect(self._show_new_order_dialog)
-        toolbar.addWidget(new_order_btn)
-        
-        toolbar.addSeparator()
-        
-        # Timeframe buttons
-        for tf in ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]:
-            btn = QPushButton(tf)
-            btn.setFixedWidth(55)
-            btn.setToolTip(f"Switch to {tf} timeframe")
-            btn.clicked.connect(lambda checked, t=tf: self._change_timeframe(t))
-            toolbar.addWidget(btn)
-        
-        toolbar.addSeparator()
-        
-        # Chart type buttons
-        toolbar.addWidget(QPushButton("Candlestick"))
-        toolbar.addWidget(QPushButton("Bar"))
-        toolbar.addWidget(QPushButton("Line"))
-    
-    def _create_chart_area(self):
-        """Create central chart area with tabs."""
-        # Create tab widget for multiple charts
-        self.chart_tabs = QTabWidget()
-        self.chart_tabs.setTabsClosable(True)
-        self.chart_tabs.setMovable(True)
-        self.chart_tabs.tabCloseRequested.connect(self._on_tab_close)
-        
-        # Add default charts
-        for symbol in ["EURUSD.H1", "GBPUSD.H1", "USDJPY.H1", "USDCHF.H1","SBIN-EQ"]:
-            chart_widget = self._create_chart_widget(symbol)
-            self.chart_tabs.addTab(chart_widget, symbol)
-        
-        self.setCentralWidget(self.chart_tabs)
-    
-    def _create_chart_widget(self, symbol_timeframe: str):
-        """Create a single chart widget."""
-        from ui.charts.chart_widget import ChartWidget
-        
-        # Create chart widget
-        symbol = symbol_timeframe.split('.')[0]
-        chart = ChartWidget(symbol)
-        
-        # Store reference to update later
-        if not hasattr(self, 'charts'):
-            self.charts = {}
-        self.charts[symbol] = chart
-        
-        # Connect alert signal
-        chart.alert_triggered.connect(self._on_alert_triggered)
-        
-        # Add one-click trading panel overlay or side widget
-        # For now, we'll wrap it in a layout to add the trading panel
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Add chart
-        layout.addWidget(chart)
-        
-        # Overlay trading panel (simplified as side widget for now)
-        trading_panel = self._create_one_click_trading(symbol)
-        # Note: In a real MT5 style, this would be an overlay. 
-        # For now, we'll just add it to the layout or keep it separate.
-        # Let's add it to the chart layout if possible or just return container
-        
-        return container
-    
-    def _create_one_click_trading(self, symbol: str):
-        """Create one-click trading widget."""
-        panel = QWidget()
-        panel.setMaximumWidth(200)
-        panel.setStyleSheet("background-color: #2d2d2d; border: 1px solid #3d3d3d; border-radius: 5px;")
-        
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(5)
-        layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Symbol label
-        symbol_label = QLabel(symbol)
-        symbol_label.setAlignment(Qt.AlignCenter)
-        symbol_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(symbol_label)
-        
-        # Buy button with price
-        buy_btn = QPushButton("BUY\n1.09582")
-        buy_btn.setObjectName("buyButton")
-        buy_btn.setMinimumHeight(50)
-        buy_btn.clicked.connect(lambda: self._place_market_order(symbol, "BUY"))
-        layout.addWidget(buy_btn)
-        
-        # Sell button with price
-        sell_btn = QPushButton("SELL\n1.09565")
-        sell_btn.setObjectName("sellButton")
-        sell_btn.setMinimumHeight(50)
-        sell_btn.clicked.connect(lambda: self._place_market_order(symbol, "SELL"))
-        layout.addWidget(sell_btn)
-        
-        # Lot size selector
-        lot_label = QLabel("Lot Size: 0.1")
-        lot_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(lot_label)
-        
-        return panel
-    
-    def _apply_stylesheet(self):
-        """Apply dark theme stylesheet."""
-        if os.path.exists("resources/styles.qss"):
-            with open("resources/styles.qss", "r") as f:
-                self.setStyleSheet(f.read())
-            logger.info("Stylesheet applied")
-        else:
-            logger.warning("Stylesheet file not found")
-    
-    
-    def _connect_broker(self):
-        """Connect to broker asynchronously."""
-        try:
-            logger.info("=== _connect_broker called ===")
-            
-            # Connect event handlers
-            event_bus.tick_received.connect(self._on_tick_received)
-            event_bus.order_placed.connect(self._on_order_placed)
-            event_bus.order_closed.connect(self._on_order_closed)
-            event_bus.account_updated.connect(self._on_account_updated)
-            
-            logger.info("About to connect candle_updated to EA Manager...")
-            
-            # Connect bar close events to EA Manager (CRITICAL for Breakout EAs!)
-            event_bus.candle_updated.connect(lambda symbol, bar: ea_manager.on_bar(symbol, bar))
-            logger.info("[OK] Connected candle_updated to EA Manager for bar-based strategies")
-            
-            # Create worker thread for connection
-            self.connection_worker = BrokerConnectionWorker(
-                self.broker, "Demo Server", "demo_user", "password"
-            )
-            
-            # Connect worker signals
-            self.connection_worker.progress_update.connect(self._on_connection_progress)
-            self.connection_worker.connection_success.connect(self._on_connection_success)
-            self.connection_worker.connection_failed.connect(self._on_connection_failed)
-            
-            # Start connection in background
-            self.connection_worker.start()
-            
-        except Exception as e:
-            logger.error(f"!!! ERROR in _connect_broker: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-    
-    def _on_connection_progress(self, message):
-        """Handle connection progress updates."""
-        logger.info(message)
-        self.status_bar.showMessage(message)
-    
-    def _on_connection_success(self, username):
-        """Handle successful connection."""
-        logger.info("Connected to broker")
-        self.status_bar.showMessage(f"Connected as {username}", 5000)
-        self.connection_label.setText(f"Connected: {username}")
-        self.connection_label.setStyleSheet("color: #4caf50; font-weight: bold;")
-        
-        # Start market data worker
-        # symbols = self.broker.get_symbols()
-        # self.quote_worker = QuoteUpdateWorker(self.broker, symbols)
-        # self.quote_worker.quotes_updated.connect(self._on_quotes_updated)
-        # self.quote_worker.update_failed.connect(lambda err: logger.error(f"Quote worker error: {err}"))
-        # self.quote_worker.start()
-        
-        # Subscribe to default symbols for testing
-        # In production, this would be loaded from config or last session
-        test_symbols = ["MCX|463007", "NSE|22", "NSE|26000", "NSE|26009"] # NATURALGAS ACC, Nifty 50, Bank Nifty, Reliance
-        self.broker.subscribe(test_symbols)
-        
-        # Setup autocomplete for Market Watch
-        if hasattr(self.broker, 'symbol_manager'):
-            # Ensure symbols are loaded (might need to download if not cached)
-            # For now, we rely on what's in cache/hardcoded
-            self.broker.symbol_manager.download_symbol_masters()
-            all_symbols = self.broker.symbol_manager.get_all_symbols()
-            self.market_watch.set_search_completer(all_symbols)
-            logger.info(f"Loaded {len(all_symbols)} symbols for autocomplete")
-        
-        # Initialize EA system
+        # Initialize EA System
         self._init_ea_system()
         
-        # Start time timer only (market data handled by worker)
-        self._setup_timers()
-    
-    def _on_connection_failed(self, error):
-        """Handle connection failure."""
-        logger.error(f"Failed to connect to broker: {error}")
-        self.status_bar.showMessage(f"Connection failed: {error}")
-        self.connection_label.setText("Connection Failed")
-    
-    def _setup_timers(self):
-        """Setup update timers."""
-        # Time update timer
-        self.time_timer = QTimer(self)
-        self.time_timer.timeout.connect(self._update_time)
-        self.time_timer.start(1000)
-
-    @pyqtSlot(list)
-    def _on_quotes_updated(self, quotes: list):
-        """Handle batch quote updates from worker."""
-        self.market_watch.update_quotes(quotes)
-
-    def _fetch_chart_data(self, symbol_name, timeframe="M5"):
-        """
-        Fetch chart data for a symbol.
-        Triggered by double click on symbol table or timeframe change.
-        """
-        try:
-            logger.info(f"Opening chart for {symbol_name} ({timeframe})")
-            
-            # 1. Check if tab already exists
-            tab_index = -1
-            for i in range(self.chart_tabs.count()):
-                if self.chart_tabs.tabText(i) == symbol_name:
-                    tab_index = i
-                    break
-            
-            # 2. Open or focus chart tab
-            if tab_index != -1:
-                # Tab exists, switch to it
-                self.chart_tabs.setCurrentIndex(tab_index)
-            else:
-                # Tab does not exist, create it
-                chart_container = self._create_chart_widget(f"{symbol_name}.{timeframe}")
-                self.chart_tabs.addTab(chart_container, symbol_name)
-                self.chart_tabs.setCurrentIndex(self.chart_tabs.count() - 1)
-            
-            # 3. Fetch data
-            logger.info(f"Requesting chart data for {symbol_name} {timeframe}")
-            
-            # Example: Fetch last 7 days of data
-            end_time = datetime.now()
-            start_time = end_time - timedelta(days=7)
-            
-            # Keep track of workers to prevent GC
-            if not hasattr(self, 'active_workers'):
-                self.active_workers = []
-                
-            # Clean up finished workers
-            self.active_workers = [w for w in self.active_workers if w.isRunning()]
-            
-            worker = HistoricalDataWorker(
-                self.broker, 
-                symbol_name, 
-                timeframe, 
-                start_time, 
-                end_time
-            )
-            
-            # Connect signal to update specific chart
-            chart_widget = self.charts[symbol_name]
-            worker.data_received.connect(chart_widget.update_chart)
-            
-            worker.data_received.connect(
-                lambda data: logger.info(f"Received {len(data)} candles for {symbol_name}")
-            )
-            worker.error_occurred.connect(
-                lambda err: logger.error(f"Chart data error for {symbol_name}: {err}")
-            )
-            
-            # Store worker reference
-            self.active_workers.append(worker)
-            worker.start()
-            logger.info(f"Worker started for {symbol_name}")
-            
-        except Exception as e:
-            logger.error(f"Error in _fetch_chart_data: {e}", exc_info=True)
-            self.status_bar.showMessage(f"Error opening chart: {e}")
-
-    def _change_timeframe(self, timeframe: str):
-        """
-        Change timeframe for the currently active chart.
-        """
-        try:
-            # Get current tab index
-            current_index = self.chart_tabs.currentIndex()
-            if current_index == -1:
-                return
-                
-            # Get symbol from tab text (assuming tab text is the symbol name)
-            symbol_name = self.chart_tabs.tabText(current_index)
-            
-            logger.info(f"Changing timeframe for {symbol_name} to {timeframe}")
-            
-            # Update chart widget timeframe
-            if hasattr(self, 'charts') and symbol_name in self.charts:
-                chart_widget = self.charts[symbol_name]
-                chart_widget.timeframe = timeframe
-                
-                # Refresh data
-                self._fetch_chart_data(symbol_name, timeframe)
-                
-        except Exception as e:
-            logger.error(f"Error changing timeframe: {e}")
-            self.status_bar.showMessage(f"Error changing timeframe: {e}")
-
-    def _on_tab_close(self, index):
-        """Handle tab close request."""
-        tab_text = self.chart_tabs.tabText(index)
-        logger.info(f"Closing tab: {tab_text}")
-        
-        # Remove from charts dict
-        if hasattr(self, 'charts') and tab_text in self.charts:
-            del self.charts[tab_text]
-            
-        self.chart_tabs.removeTab(index)
-
-
-
-    @pyqtSlot(Symbol)
-    def _on_tick_received(self, symbol: Symbol):
-        """Handle tick update."""
-        logger.debug(f"Tick received: {symbol.name} Last: {symbol.last}")
-        
-        # Update Market Watch incrementally
-        self.market_watch.update_tick(symbol)
-        
-        # Route to EA Manager
-        ea_manager.on_tick(symbol)
-        
-        # Update Charts
-        if hasattr(self, 'charts'):
-            # Check if we have any charts for this symbol
-            # Charts are keyed by symbol name (e.g. "EURUSD")
-            # But symbol.name might be "EURUSD" or "EURUSD.r" etc.
-            
-            logger.debug(f"Checking charts for {symbol.name}. Active charts: {list(self.charts.keys())}")
-            
-            # Direct match
-            if symbol.name in self.charts:
-                logger.debug(f"Updating chart for {symbol.name} with price {symbol.last}")
-                self.charts[symbol.name].update_tick(symbol)
-    
-    @pyqtSlot(object)
-    def _on_alert_triggered(self, alert):
-        """Handle alert being triggered."""
-        from data.models import Alert
-        
-        logger.info(f"Alert triggered: {alert.symbol} {alert.condition} {alert.price}")
-        
-        # Build notification message
-        message = f"{alert.symbol}\n{alert.condition.upper()} {alert.price:.2f}"
-        
-        # Show notification based on type
-        if alert.notification_type in ["visual", "both"]:
-            # Desktop notification
-            QMessageBox.information(
-                self,
-                "Price Alert Triggered!",
-                message,
-                QMessageBox.Ok
-            )
-        
-        if alert.notification_type in ["audio", "both"]:
-            # Play sound (requires QSound or similar)
-            try:
-                from PyQt5.QtMultimedia import QSound
-                # You would need an alert sound file
-                # QSound.play("resources/alert.wav")
-                logger.info("Audio alert (sound file not configured)")
-            except ImportError:
-                logger.warning("QMultimedia not available for audio alerts")
-        
-        # Update status bar
-        self.status_bar.showMessage(f"Alert triggered: {alert.symbol} {alert.condition} {alert.price}", 10000)
-    
-    @pyqtSlot(Order)
-    def _on_order_placed(self, order: Order):
-        """Handle new order."""
-        logger.info(f"Order placed: {order.ticket}")
-        self.terminal.update_trade_table()
-        self.status_bar.showMessage(f"Order {order.ticket} placed successfully", 3000)
-    
-    @pyqtSlot(Order)
-    def _on_order_closed(self, order: Order):
-        """Handle order closed."""
-        logger.info(f"Order closed: {order.ticket}")
-        self.terminal.update_trade_table()
-        self.terminal.update_history_table()
-        self.status_bar.showMessage(f"Order {order.ticket} closed", 3000)
-    
-    @pyqtSlot(dict)
-    def _on_account_updated(self, account_info: dict):
-        """Handle account info update."""
-        self.terminal.update_account_info(account_info)
-    
-    def _create_navigator(self):
-        """Create Navigator dock."""
-        self.navigator = Navigator(self)
-        self.navigator.plugin_double_clicked.connect(self._on_plugin_double_clicked)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.navigator)
-
-    def _load_plugins(self):
-        """Load and initialize plugins."""
+        # Discover and Load Plugins
         plugin_manager.discover_plugins()
-        # Update Navigator with loaded plugins
-        self.navigator.update_plugins(plugin_manager.get_all_plugins())
+        self.ui.navigator.update_plugins(plugin_manager.get_all_plugins())
+        
+        # Create default charts
+        self.chart_manager.create_default_charts()
+        
+        # Connect to broker
+        self.connection_manager.connect_broker()
+        
+    # --- Delegate Methods for UI Signals ---
+    
+    def _fetch_chart_data(self, symbol_name, timeframe="M5"):
+        self.chart_manager.fetch_chart_data(symbol_name, timeframe)
+        
+    def _change_timeframe(self, timeframe):
+        self.chart_manager.change_timeframe(timeframe)
+        
+    def _on_tab_close(self, index):
+        self.chart_manager.on_tab_close(index)
+        
+    def _on_symbol_added(self, symbol: str):
+        """Handle new symbol added from Market Watch."""
+        logger.info(f"Adding symbol: {symbol}")
+        self.ui.status_bar.showMessage(f"Adding symbol: {symbol}...", 3000)
+        self.broker.subscribe([symbol])
+
+    def _on_clear_cache(self):
+        """Handle clear cache action."""
+        from utils.cache_manager import clear_cache
+        
+        reply = QMessageBox.question(
+            self, 
+            "Clear Cache", 
+            "Are you sure you want to clear the application cache?\n"
+            "This will delete temporary files and may require a restart.",
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                count = clear_cache(os.getcwd())
+                QMessageBox.information(
+                    self, 
+                    "Cache Cleared", 
+                    f"Successfully cleared {count} cache items.\n"
+                    "Please restart the application for changes to take full effect."
+                )
+                logger.info(f"User cleared cache: {count} items deleted")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to clear cache: {str(e)}")
+                logger.error(f"Failed to clear cache: {e}")
 
     def _on_plugin_double_clicked(self, plugin_name, plugin_type):
         """Handle plugin activation from Navigator."""
+        # This logic was in main.py, keeping it here or moving to a PluginManager?
+        # It interacts with UI (applying indicators to charts).
+        # ChartManager handles charts.
+        
         logger.info(f"Plugin activated: {plugin_name} ({plugin_type})")
         
         try:
@@ -614,7 +132,6 @@ class MainWindow(QMainWindow):
             elif plugin_type == "Script":
                 self._run_script(plugin_name)
             elif plugin_type == "Strategy":
-                # For MA Crossover EA specifically
                 if "MA Crossover" in plugin_name:
                     self._start_ma_crossover_ea()
                 else:
@@ -625,17 +142,22 @@ class MainWindow(QMainWindow):
 
     def _apply_indicator(self, name):
         """Apply an indicator to the active chart."""
-        # Get active chart
-        current_index = self.chart_tabs.currentIndex()
+        from core.plugin_manager import plugin_manager
+        from ui.indicator_dialog import IndicatorDialog
+        from PyQt5.QtWidgets import QDialog
+        
+        # Get active chart via ChartManager
+        chart_tabs = self.ui.chart_tabs
+        current_index = chart_tabs.currentIndex()
         if current_index == -1:
             QMessageBox.warning(self, "No Chart", "Please open a chart first.")
             return
             
-        symbol = self.chart_tabs.tabText(current_index)
-        if symbol not in self.charts:
+        symbol = chart_tabs.tabText(current_index)
+        if symbol not in self.chart_manager.charts:
             return
             
-        chart_widget = self.charts[symbol]
+        chart_widget = self.chart_manager.charts[symbol]
         
         # Get indicator
         indicator = plugin_manager.get_indicator(name)
@@ -666,85 +188,64 @@ class MainWindow(QMainWindow):
 
     def _run_script(self, name):
         """Run a script."""
+        from core.plugin_manager import plugin_manager
         script = plugin_manager.get_script(name)
         if script:
             script.run(broker=self.broker, parent=self)
 
-    def _create_status_bar(self):
-        """Create status bar."""
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        
-        self.connection_label = QLabel("Not Connected")
-        self.connection_label.setStyleSheet("color: #f44336; font-weight: bold;")
-        self.status_bar.addPermanentWidget(self.connection_label)
-        
-        self.time_label = QLabel("00:00:00")
-        self.status_bar.addPermanentWidget(self.time_label)
-        
-        self.status_bar.showMessage("Ready", 3000)
+    # --- Event Handlers (Called by ConnectionManager/EventBus) ---
 
-    def _apply_stylesheet(self):
-        """Apply dark theme stylesheet."""
-        if os.path.exists("resources/styles.qss"):
-            with open("resources/styles.qss", "r") as f:
-                self.setStyleSheet(f.read())
-            logger.info("Stylesheet applied")
-        else:
-            logger.warning("Stylesheet file not found")
-    
-    
-    def _connect_broker(self):
-        """Connect to broker asynchronously."""
-        # Connect event handlers
-        event_bus.tick_received.connect(self._on_tick_received)
-        event_bus.order_placed.connect(self._on_order_placed)
-        event_bus.order_closed.connect(self._on_order_closed)
-        event_bus.account_updated.connect(self._on_account_updated)
+    @pyqtSlot(Symbol)
+    def _on_tick_received(self, symbol: Symbol):
+        """Handle tick update."""
+        # Update Market Watch
+        if self.ui.market_watch:
+            self.ui.market_watch.update_tick(symbol)
         
-        # Create worker thread for connection
-        self.connection_worker = BrokerConnectionWorker(
-            self.broker, "Demo Server", "demo_user", "password"
-        )
+        # Route to EA Manager
+        ea_manager.on_tick(symbol)
         
-        # Connect worker signals
-        self.connection_worker.progress_update.connect(self._on_connection_progress)
-        self.connection_worker.connection_success.connect(self._on_connection_success)
-        self.connection_worker.connection_failed.connect(self._on_connection_failed)
-        
-        # Start connection in background
-        self.connection_worker.start()
+        # Update Charts
+        self.chart_manager.update_tick(symbol)
     
-    def _on_connection_progress(self, message):
-        """Handle connection progress updates."""
-        logger.info(message)
-        self.status_bar.showMessage(message)
+    @pyqtSlot(object)
+    def _on_alert_triggered(self, alert):
+        """Handle alert being triggered."""
+        logger.info(f"Alert triggered: {alert.symbol} {alert.condition} {alert.price}")
+        
+        message = f"{alert.symbol}\n{alert.condition.upper()} {alert.price:.2f}"
+        
+        if alert.notification_type in ["visual", "both"]:
+            QMessageBox.information(self, "Price Alert Triggered!", message, QMessageBox.Ok)
+        
+        if alert.notification_type in ["audio", "both"]:
+            # Audio logic...
+            pass
+        
+        self.ui.status_bar.showMessage(f"Alert triggered: {alert.symbol} {alert.condition} {alert.price}", 10000)
+    
+    @pyqtSlot(Order)
+    def _on_order_placed(self, order: Order):
+        """Handle new order."""
+        logger.info(f"Order placed: {order.ticket}")
+        self.ui.terminal.update_trade_table()
+        self.ui.status_bar.showMessage(f"Order {order.ticket} placed successfully", 3000)
+    
+    @pyqtSlot(Order)
+    def _on_order_closed(self, order: Order):
+        """Handle order closed."""
+        logger.info(f"Order closed: {order.ticket}")
+        self.ui.terminal.update_trade_table()
+        self.ui.terminal.update_history_table()
+        self.ui.status_bar.showMessage(f"Order {order.ticket} closed", 3000)
+    
+    @pyqtSlot(dict)
+    def _on_account_updated(self, account_info: dict):
+        """Handle account info update."""
+        self.ui.terminal.update_account_info(account_info)
 
-    
-    def _update_time(self):
-        """Update status bar time."""
-        from datetime import datetime
-        current_time = datetime.now().strftime("%H:%M:%S")
-        self.time_label.setText(current_time)
-    
-    def _on_symbol_double_click(self, index):
-        """Handle double-click on symbol in Market Watch."""
-        row = index.row()
-        symbol_item = self.symbols_table.item(row, 0)
-        if symbol_item:
-            symbol = symbol_item.text().replace("● ", "")
-            logger.info(f"Opening chart for {symbol}")
-            QTimer.singleShot(1000, lambda: self._fetch_chart_data(symbol))
-            # In full implementation, would open new chart tab
-            
-    def _on_symbol_added(self, symbol: str):
-        """Handle new symbol added from Market Watch."""
-        logger.info(f"Adding symbol: {symbol}")
-        self.status_bar.showMessage(f"Adding symbol: {symbol}...", 3000)
-        # Subscribe to the symbol
-        # Note: broker.subscribe handles list, so wrap in list
-        self.broker.subscribe([symbol])
-    
+    # --- Order Management ---
+
     def _place_market_order(self, symbol: str, order_type_str: str):
         """Place a market order."""
         from data.models import OrderType
@@ -766,14 +267,13 @@ class MainWindow(QMainWindow):
     
     def _show_new_order_dialog(self):
         """Show the new order dialog."""
-        # Get current symbol from active chart or market watch
         symbol = "NSE|26000" # Default
         price = 0.0
         
         # Try to get from active chart
-        current_index = self.chart_tabs.currentIndex()
+        current_index = self.ui.chart_tabs.currentIndex()
         if current_index != -1:
-            symbol = self.chart_tabs.tabText(current_index)
+            symbol = self.ui.chart_tabs.tabText(current_index)
         
         dialog = OrderDialog(symbol, price, self)
         dialog.order_placed.connect(self._place_order_from_dialog)
@@ -783,15 +283,12 @@ class MainWindow(QMainWindow):
         """Handle order placement from dialog."""
         try:
             logger.info(f"Placing order: {order_data}")
-            
-            # Map string types to OrderType enum
             from data.models import OrderType
             
-            side = order_data['side'] # BUY/SELL
-            o_type = order_data['order_type'] # MARKET, LIMIT, SL-L, SL-M
+            side = order_data['side']
+            o_type = order_data['order_type']
             
             final_order_type = OrderType.BUY
-            
             if side == "BUY":
                 if o_type == "MARKET": final_order_type = OrderType.BUY
                 elif o_type == "LIMIT": final_order_type = OrderType.BUY_LIMIT
@@ -810,343 +307,112 @@ class MainWindow(QMainWindow):
                 product_type=order_data['product_type']
             )
             
-            self.status_bar.showMessage(f"Order placed for {order_data['symbol']}", 5000)
+            self.ui.status_bar.showMessage(f"Order placed for {order_data['symbol']}", 5000)
             
         except Exception as e:
             logger.error(f"Error placing order: {e}")
             QMessageBox.critical(self, "Order Error", f"Failed to place order: {str(e)}")
 
-    def _on_clear_cache(self):
-        """Handle clear cache action."""
-        from utils.cache_manager import clear_cache
-        
-        reply = QMessageBox.question(
-            self, 
-            "Clear Cache", 
-            "Are you sure you want to clear the application cache?\n"
-            "This will delete temporary files and may require a restart.",
-            QMessageBox.Yes | QMessageBox.No, 
-            QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            try:
-                count = clear_cache(os.getcwd())
-                QMessageBox.information(
-                    self, 
-                    "Cache Cleared", 
-                    f"Successfully cleared {count} cache items.\n"
-                    "Please restart the application for changes to take full effect."
-                )
-                logger.info(f"User cleared cache: {count} items deleted")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clear cache: {str(e)}")
-                logger.error(f"Failed to clear cache: {e}")
+    # --- EA System ---
 
     def _init_ea_system(self):
         """Initialize Expert Advisor system."""
         logger.info("Initializing EA system...")
         
         try:
-            # Set broker for execution service
             execution_service.set_broker(self.broker)
-            execution_service.set_paper_trading(True)  # Start in paper trading mode for safety
+            execution_service.set_paper_trading(True)
             
-            # Connect EA signals to event bus
             ea_manager.signal_generated.connect(self._on_ea_signal)
-            ea_manager.ea_started.connect(lambda name: self.status_bar.showMessage(f"EA Started: {name}", 3000))
-            ea_manager.ea_stopped.connect(lambda name: self.status_bar.showMessage(f"EA Stopped: {name}", 3000))
+            ea_manager.ea_started.connect(lambda name: self.ui.status_bar.showMessage(f"EA Started: {name}", 3000))
+            ea_manager.ea_stopped.connect(lambda name: self.ui.status_bar.showMessage(f"EA Stopped: {name}", 3000))
             ea_manager.ea_error.connect(self._on_ea_error)
             
-            # Connect execution service signals
             execution_service.order_placed.connect(self._on_order_placed)
             execution_service.order_rejected.connect(self._on_order_rejected)
             
-            # Connect position tracker signals
             position_tracker.position_opened.connect(lambda p: logger.info(f"Position opened: {p.symbol}"))
             position_tracker.position_closed.connect(lambda p: logger.info(f"Position closed: {p.symbol} P/L: {p.profit:.2f}"))
             
-            # Create and register MA Crossover EA
-            ma_ea = create_ma_crossover_ea(
-                symbol="MCX|463007",  # Nifty 50
-                timeframe="M1",
-                fast_period=10,
-                slow_period=20,
-                ma_type="SMA",
-                lot_size=1,
-                stop_loss_pips=50,
-                take_profit_pips=100,
-                use_trailing_stop=True,
-                trailing_stop_pips=30
-            )
-            
+            # Register EAs
+            ma_ea = create_ma_crossover_ea("MCX|463007", "M1", 10, 20, "SMA", 1, 50, 100, True, 30)
             ea_manager.register_ea(ma_ea)
             
-            # Create and register Bullish Breakout EA
-            breakout_ea = create_bullish_breakout_ea(
-                symbol="MCX|463007",  # Nifty 50
-                timeframe="M1",
-                sl_buffer_pips=5,  # 5 pips buffer below previous candle low
-                lot_size=1,
-                take_profit_pips=0,  # Auto-calculate as 2x risk
-                use_trailing_stop=True,
-                trailing_stop_pips=30
-            )
-            
+            breakout_ea = create_bullish_breakout_ea("MCX|463007", "M1", 5, 1, 0, True, 30)
             ea_manager.register_ea(breakout_ea)
             
-            # Create and register Bearish Breakout EA
-            bearish_ea = create_bearish_breakout_ea(
-                symbol="MCX|463007",  # Nifty 50
-                timeframe="M1",
-                sl_buffer_pips=5,  # 5 pips buffer above previous candle high
-                lot_size=1,
-                take_profit_pips=0,  # Auto-calculate as 2x risk
-                use_trailing_stop=True,
-                trailing_stop_pips=30
-            )
-            
+            bearish_ea = create_bearish_breakout_ea("MCX|463007", "M1", 5, 1, 0, True, 30)
             ea_manager.register_ea(bearish_ea)
             
-            # Create and register Fixed Price Trigger EA
-            trigger_ea = create_fixed_price_trigger_ea(
-                symbol="MCX|463007",
-                trigger_price=440.0,  # Price threshold
-                lot_size=1,
-                stop_loss_pips=10,
-                take_profit_pips=20
-            )
-            
+            trigger_ea = create_fixed_price_trigger_ea("MCX|463007", 440.0, 1, 10, 20)
             ea_manager.register_ea(trigger_ea)
             
-            # Refresh EA panel
-            self.ea_panel.refresh_table()
-            
+            self.ui.ea_panel.refresh_table()
             logger.info("EA system initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize EA system: {e}")
-            QMessageBox.warning(
-                self,
-                "EA System Error",
-                f"Failed to initialize Expert Advisor system:\n{e}"
-            )
-    
+            QMessageBox.warning(self, "EA System Error", f"Failed to initialize Expert Advisor system:\n{e}")
+
     def _start_ma_crossover_ea(self):
-        """Start MA Crossover EA."""
-        ea = ea_manager.get_ea("MA Crossover EA")
+        self._start_ea("MA Crossover EA")
         
-        if not ea:
-            QMessageBox.warning(
-                self,
-                "EA Not Found",
-                "MA Crossover EA not registered. Please restart the application."
-            )
-            return
-        
-        # Check if already running
-        if ea.is_running:
-            QMessageBox.information(
-                self,
-                "EA Running",
-                "MA Crossover EA is already running."
-            )
-            return
-        
-        # Start EA
-        success = ea_manager.start_ea("MA Crossover EA")
-        
-        if success:
-            self.ea_panel.refresh_table()
-            QMessageBox.information(
-                self,
-                "EA Started",
-                "MA Crossover EA started successfully!\n\n"
-                "Monitor the EA Control Panel for trading signals and performance."
-            )
-        else:
-            QMessageBox.critical(
-                self,
-                "EA Error",
-                "Failed to start MA Crossover EA. Check logs for details."
-            )
-    
     def _start_bullish_breakout_ea(self):
-        """Start Bullish Breakout EA."""
-        ea = ea_manager.get_ea("Bullish Breakout EA")
+        self._start_ea("Bullish Breakout EA")
         
-        if not ea:
-            QMessageBox.warning(
-                self,
-                "EA Not Found",
-                "Bullish Breakout EA not registered. Please restart the application."
-            )
-            return
-        
-        # Check if already running
-        if ea.is_running:
-            QMessageBox.information(
-                self,
-                "EA Running",
-                "Bullish Breakout EA is already running."
-            )
-            return
-        
-        # Start EA
-        success = ea_manager.start_ea("Bullish Breakout EA")
-        
-        if success:
-            self.ea_panel.refresh_table()
-            QMessageBox.information(
-                self,
-                "EA Started",
-                "Bullish Breakout EA started successfully!\n\n"
-                "Pattern: Lower low, Higher high, Higher close\n"
-                "Entry: Previous-to-previous candle high\n"
-                "SL: Previous candle low with buffer\n\n"
-                "Monitor EA Control Panel for signals."
-            )
-        else:
-            QMessageBox.critical(
-                self,
-                "EA Error",
-                "Failed to start Bullish Breakout EA. Check logs for details."
-            )
-    
     def _start_bearish_breakout_ea(self):
-        """Start Bearish Breakout EA."""
-        ea = ea_manager.get_ea("Bearish Breakout EA")
+        self._start_ea("Bearish Breakout EA")
         
-        if not ea:
-            QMessageBox.warning(
-                self,
-                "EA Not Found",
-                "Bearish Breakout EA not registered. Please restart the application."
-            )
-            return
-        
-        # Check if already running
-        if ea.is_running:
-            QMessageBox.information(
-                self,
-                "EA Running",
-                "Bearish Breakout EA is already running."
-            )
-            return
-        
-        # Start EA
-        success = ea_manager.start_ea("Bearish Breakout EA")
-        
-        if success:
-            self.ea_panel.refresh_table()
-            QMessageBox.information(
-                self,
-                "EA Started",
-                "Bearish Breakout EA started successfully!\n\n"
-                "Pattern: Higher high, Lower low, Lower close\n"
-                "Entry: Previous-to-previous candle low\n"
-                "SL: Previous candle high with buffer\n\n"
-                "Monitor EA Control Panel for signals."
-            )
-        else:
-            QMessageBox.critical(
-                self,
-                "EA Error",
-                "Failed to start Bearish Breakout EA. Check logs for details."
-            )
-    
     def _start_fixed_price_trigger_ea(self):
-        """Start Fixed Price Trigger EA."""
-        ea = ea_manager.get_ea("Fixed Price Trigger EA")
+        self._start_ea("Fixed Price Trigger EA")
         
+    def _start_ea(self, ea_name):
+        """Generic helper to start an EA."""
+        ea = ea_manager.get_ea(ea_name)
         if not ea:
-            QMessageBox.warning(
-                self,
-                "EA Not Found",
-                "Fixed Price Trigger EA not registered. Please restart the application."
-            )
+            QMessageBox.warning(self, "EA Not Found", f"{ea_name} not registered.")
             return
         
         if ea.is_running:
-            QMessageBox.information(
-                self,
-                "EA Running",
-                "Fixed Price Trigger EA is already running."
-            )
+            QMessageBox.information(self, "EA Running", f"{ea_name} is already running.")
             return
         
-        success = ea_manager.start_ea("Fixed Price Trigger EA")
-        
+        success = ea_manager.start_ea(ea_name)
         if success:
-            self.ea_panel.refresh_table()
-            QMessageBox.information(
-                self,
-                "EA Started",
-                "Fixed Price Trigger EA started successfully!\n\n"
-                "Strategy: Price threshold trigger\n"
-                "Trigger Price: 440.0\n"
-                "BUY when price > 440, SELL when price < 440\n\n"
-                "Monitor EA Control Panel for signals."
-            )
+            self.ui.ea_panel.refresh_table()
+            QMessageBox.information(self, "EA Started", f"{ea_name} started successfully!")
         else:
-            QMessageBox.critical(
-                self,
-                "EA Error",
-                "Failed to start Fixed Price Trigger EA. Check logs for details."
-            )
-    
+            QMessageBox.critical(self, "EA Error", f"Failed to start {ea_name}.")
+
     def _on_ea_signal(self, signal):
-        """Handle EA signal."""
-        from data.models import EASignal
-        
         logger.info(f"EA Signal: {signal.ea_name} - {signal.signal_type} @ {signal.price}")
-        
-        # Show notification
-        self.status_bar.showMessage(
-            f"{signal.ea_name}: {signal.signal_type} {signal.symbol} @ {signal.price}",
-            5000
-        )
-        
-        # Emit to event bus
+        self.ui.status_bar.showMessage(f"{signal.ea_name}: {signal.signal_type} {signal.symbol} @ {signal.price}", 5000)
         event_bus.ea_signal_generated.emit(signal)
     
     def _on_ea_error(self, ea_name: str, error_msg: str):
-        """Handle EA error."""
         logger.error(f"EA Error - {ea_name}: {error_msg}")
-        self.status_bar.showMessage(f"EA Error - {ea_name}: {error_msg}", 10000)
-        self.ea_panel.refresh_table()
+        self.ui.status_bar.showMessage(f"EA Error - {ea_name}: {error_msg}", 10000)
+        self.ui.ea_panel.refresh_table()
     
     def _on_order_rejected(self, ea_name: str, reason: str):
-        """Handle order rejection."""
         logger.warning(f"Order rejected from {ea_name}: {reason}")
-        self.status_bar.showMessage(f"Order rejected: {reason}", 5000)
+        self.ui.status_bar.showMessage(f"Order rejected: {reason}", 5000)
 
     def closeEvent(self, event):
         """Handle application close."""
         logger.info("Application closing...")
-        
-        # Stop all EAs
         ea_manager.stop_all()
-        
-        # Disconnect broker
-        self.broker.disconnect()
-        
+        self.connection_manager.disconnect()
         event.accept()
 
 
 def main():
     """Application entry point."""
-    # Create application
     app = QApplication(sys.argv)
     app.setApplicationName("MT5 Trading Platform")
-    
-    # Create and show main window
     window = MainWindow()
     window.show()
-    
     logger.info("Application started")
-    
-    # Run event loop
     sys.exit(app.exec_())
 
 
