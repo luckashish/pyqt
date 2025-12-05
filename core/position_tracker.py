@@ -6,7 +6,8 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from data.models import Order, OrderStatus, Position
+from data.models import Order, OrderStatus, Position, OHLCData
+from core.event_bus import event_bus
 from utils.logger import logger
 
 
@@ -112,6 +113,9 @@ class PositionTracker(QObject):
         # Create position object
         position = self._order_to_position(order)
         self.position_closed.emit(position)
+        
+        # Emit order closed event for EAs
+        event_bus.order_closed.emit(order)
         
         profit = order.calculate_profit(close_price)
         logger.info(f"Position closed: {ticket} @ {close_price}, Profit: {profit:.2f}")
@@ -282,6 +286,90 @@ class PositionTracker(QObject):
             profit=profit,
             is_long=order.is_buy
         )
+
+    def on_tick(self, symbol: object):
+        """
+        Process tick for client-side SL/TP monitoring.
+        """
+        current_price = symbol.last
+        if not current_price:
+            return
+            
+        # logger.debug(f"Tick received for {symbol.name}: {current_price}")
+
+        # Check all open positions for this symbol
+        # Create a copy to avoid modification during iteration
+        for ticket, order in list(self.open_positions.items()):
+            logger.info(f"Checking {ticket} {order.symbol} vs {symbol.name} @ {current_price}")
+            if order.symbol == symbol.name:
+                self._check_sl_tp(order, current_price)
+                
+                # Also update trailing stops
+                self.update_trailing_stops(symbol.name, current_price)
+
+    def on_bar(self, bar: OHLCData, symbol_name: str):
+        """
+        Process bar for client-side SL/TP monitoring (Backup check).
+        Checks if High/Low hit SL/TP during the bar.
+        """
+        logger.info(f"PositionTracker: Received bar for {symbol_name} H:{bar.high} L:{bar.low}")
+        
+        # Check all open positions for this symbol
+        for ticket, order in list(self.open_positions.items()):
+            if order.symbol == symbol_name:
+                logger.info(f"Checking Bar SL/TP for {ticket} (SL:{order.sl} TP:{order.tp})")
+                self._check_sl_tp_bar(order, bar)
+                
+    def _check_sl_tp_bar(self, order: Order, bar: OHLCData):
+        """Check SL/TP against bar High/Low."""
+        from core.execution_service import execution_service
+        
+        # Check Stop Loss
+        if order.sl > 0:
+            # For BUY: Low <= SL
+            if order.is_buy and bar.low <= order.sl:
+                logger.info(f"SL HIT (Bar) for {order.ticket}: Low {bar.low} <= SL {order.sl}")
+                execution_service.close_position(order.ticket, "SL_HIT_BAR")
+                return
+            # For SELL: High >= SL
+            elif not order.is_buy and bar.high >= order.sl:
+                logger.info(f"SL HIT (Bar) for {order.ticket}: High {bar.high} >= SL {order.sl}")
+                execution_service.close_position(order.ticket, "SL_HIT_BAR")
+                return
+
+        # Check Take Profit
+        if order.tp > 0:
+            # For BUY: High >= TP
+            if order.is_buy and bar.high >= order.tp:
+                logger.info(f"TP HIT (Bar) for {order.ticket}: High {bar.high} >= TP {order.tp}")
+                execution_service.close_position(order.ticket, "TP_HIT_BAR")
+                return
+            # For SELL: Low <= TP
+            elif not order.is_buy and bar.low <= order.tp:
+                logger.info(f"TP HIT (Bar) for {order.ticket}: Low {bar.low} <= TP {order.tp}")
+                execution_service.close_position(order.ticket, "TP_HIT_BAR")
+                return
+
+    def _check_sl_tp(self, order: Order, current_price: float):
+        """Check if SL or TP is hit."""
+        from core.execution_service import execution_service
+        
+        # Check Stop Loss
+        if order.sl > 0:
+            if (order.is_buy and current_price <= order.sl) or \
+               (not order.is_buy and current_price >= order.sl):
+                logger.info(f"SL HIT for {order.ticket}: {current_price} (SL {order.sl})")
+                execution_service.close_position(order.ticket, "SL_HIT")
+                return
+
+        # Check Take Profit
+        if order.tp > 0:
+            logger.info(f"Checking TP {order.tp} for {order.ticket} (Sell={not order.is_buy}) @ {current_price}")
+            if (order.is_buy and current_price >= order.tp) or \
+               (not order.is_buy and current_price <= order.tp):
+                logger.info(f"TP HIT for {order.ticket}: {current_price} (TP {order.tp})")
+                execution_service.close_position(order.ticket, "TP_HIT")
+                return
 
 
 # Global position tracker instance

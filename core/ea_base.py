@@ -236,6 +236,8 @@ class ExpertAdvisor(Strategy, QObject, metaclass=CombinedMeta):
             order: Updated order
         """
         # Track open positions
+        logger.info(f"{self.name}: Processing order update {order.ticket} status={order.status.value}")
+        
         if order.status.value == "closed":
             if order.ticket in self.open_tickets:
                 self.open_tickets.remove(order.ticket)
@@ -251,9 +253,10 @@ class ExpertAdvisor(Strategy, QObject, metaclass=CombinedMeta):
                     self.state.winning_trades += 1
                     
                 logger.info(f"{self.name}: Order {order.ticket} closed with profit {profit:.2f}")
-        elif order.status.value == "active":
+        elif order.status.value in ["active", "filled"]:  # Accept FILLED as active
             if order.ticket not in self.open_tickets:
                 self.open_tickets.append(order.ticket)
+                logger.info(f"{self.name}: Added open position {order.ticket} | SL: {order.sl} | TP: {order.tp}")
                 
         self.state.open_positions = len(self.open_tickets)
         self._emit_state_changed()

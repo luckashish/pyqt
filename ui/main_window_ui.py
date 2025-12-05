@@ -164,6 +164,16 @@ class MainWindowUI:
         toolbar.addWidget(QPushButton("Candlestick"))
         toolbar.addWidget(QPushButton("Bar"))
         toolbar.addWidget(QPushButton("Line"))
+        
+        toolbar.addSeparator()
+        
+        # Paper Trading Toggle
+        self.paper_trading_btn = QPushButton("Paper Trading")
+        self.paper_trading_btn.setCheckable(True)
+        self.paper_trading_btn.setChecked(True)
+        self.paper_trading_btn.setStyleSheet("QPushButton:checked { background-color: #4CAF50; color: white; }")
+        self.paper_trading_btn.clicked.connect(self.main_window._toggle_paper_trading)
+        toolbar.addWidget(self.paper_trading_btn)
 
     def _create_chart_area(self):
         """Create central chart area with tabs."""

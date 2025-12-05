@@ -23,6 +23,7 @@ class EAManager(QObject):
     ea_started = pyqtSignal(str)  # EA name
     ea_stopped = pyqtSignal(str)  # EA name
     ea_error = pyqtSignal(str, str)  # EA name, error message
+    ea_updated = pyqtSignal(str)  # EA name (for stats update)
     signal_generated = pyqtSignal(object)  # EASignal
     
     _instance = None
@@ -254,6 +255,7 @@ class EAManager(QObject):
             
             # Only send update if order is from this EA or symbol matches
             if order.comment.startswith(ea.name) or (ea.config and ea.config.symbol == order.symbol):
+                logger.info(f"EAManager: Routing order {order.ticket} ({order.status.value}) to {ea_name}")
                 try:
                     ea.on_order_update(order)
                 except Exception as e:
@@ -287,8 +289,8 @@ class EAManager(QObject):
         
     def _on_ea_state_changed(self, state: EAState):
         """Handle EA state change."""
-        # State changes are logged in the EA itself
-        pass
+        # Re-emit as generic update for UI
+        self.ea_updated.emit(state.name)
         
     def _on_ea_error(self, ea_name: str, error_msg: str):
         """Handle EA error."""

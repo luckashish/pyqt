@@ -104,10 +104,12 @@ class EAControlPanel(QWidget):
         stats_layout = QHBoxLayout(stats_group)
         
         self.lbl_running = QLabel("Running: 0")
+        self.lbl_open_pos = QLabel("Open Positions: 0")
         self.lbl_total_profit = QLabel("Total Profit: $0.00")
         self.lbl_total_trades = QLabel("Total Trades: 0")
         
         stats_layout.addWidget(self.lbl_running)
+        stats_layout.addWidget(self.lbl_open_pos)
         stats_layout.addWidget(self.lbl_total_profit)
         stats_layout.addWidget(self.lbl_total_trades)
         stats_layout.addStretch()
@@ -120,6 +122,7 @@ class EAControlPanel(QWidget):
         ea_manager.ea_unregistered.connect(self.on_ea_unregistered)
         ea_manager.ea_started.connect(self.refresh_table)
         ea_manager.ea_stopped.connect(self.refresh_table)
+        ea_manager.ea_updated.connect(lambda name: self.refresh_table())
         ea_manager.ea_error.connect(self.on_ea_error)
         
     @pyqtSlot(str)
@@ -150,6 +153,7 @@ class EAControlPanel(QWidget):
         
         total_profit = 0.0
         total_trades = 0
+        total_open_pos = 0
         running_count = 0
         
         for row, (ea_name, state) in enumerate(states.items()):
@@ -214,8 +218,13 @@ class EAControlPanel(QWidget):
             total_profit += state.profit
             total_trades += state.total_trades
             
+            # Count open positions from state
+            # Note: state.open_positions is an int count
+            total_open_pos += state.open_positions
+            
         # Update statistics
         self.lbl_running.setText(f"Running: {running_count}/{len(states)}")
+        self.lbl_open_pos.setText(f"Open Positions: {total_open_pos}")
         self.lbl_total_profit.setText(f"Total Profit: ${total_profit:.2f}")
         
         if total_profit > 0:

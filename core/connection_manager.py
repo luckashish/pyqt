@@ -3,6 +3,7 @@ from utils.logger import logger
 from utils.worker_threads import BrokerConnectionWorker
 from core.event_bus import event_bus
 from core.ea_manager import ea_manager
+from core.position_tracker import position_tracker
 
 class ConnectionManager:
     """
@@ -44,7 +45,8 @@ class ConnectionManager:
             
             # Connect bar close events to EA Manager (CRITICAL for Breakout EAs!)
             event_bus.candle_updated.connect(lambda symbol, bar: ea_manager.on_bar(symbol, bar))
-            logger.info("[OK] Connected candle_updated to EA Manager for bar-based strategies")
+            event_bus.candle_updated.connect(lambda symbol, bar: position_tracker.on_bar(bar, symbol))
+            logger.info("[OK] Connected candle_updated to EA Manager and Position Tracker")
             
             # Create worker thread for connection
             self.connection_worker = BrokerConnectionWorker(

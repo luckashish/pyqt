@@ -14,7 +14,7 @@ from core.event_bus import event_bus
 from brokers.factory import broker_factory
 from brokers.registry import register_builtin_brokers
 
-from data.models import Symbol, Order
+from data.models import Symbol, Order, OrderType
 from ui.order_dialog import OrderDialog
 
 # EA System
@@ -119,6 +119,20 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to clear cache: {str(e)}")
                 logger.error(f"Failed to clear cache: {e}")
 
+    def _toggle_paper_trading(self, checked):
+        """Toggle paper trading mode."""
+        execution_service.set_paper_trading(checked)
+        status = "ENABLED" if checked else "DISABLED"
+        self.ui.status_bar.showMessage(f"Paper Trading {status}", 3000)
+        
+        # Update button style
+        if checked:
+            self.ui.paper_trading_btn.setText("Paper Trading")
+            self.ui.paper_trading_btn.setStyleSheet("QPushButton:checked { background-color: #4CAF50; color: white; }")
+        else:
+            self.ui.paper_trading_btn.setText("Real Trading")
+            self.ui.paper_trading_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+
     def _on_plugin_double_clicked(self, plugin_name, plugin_type):
         """Handle plugin activation from Navigator."""
         # This logic was in main.py, keeping it here or moving to a PluginManager?
@@ -208,6 +222,9 @@ class MainWindow(QMainWindow):
         # Route to EA Manager
         ea_manager.on_tick(symbol)
         
+        # Route to Position Tracker (Client-Side SL/TP)
+        position_tracker.on_tick(symbol)
+        
         # Update Charts
         self.chart_manager.update_tick(symbol)
     
@@ -230,7 +247,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(Order)
     def _on_order_placed(self, order: Order):
         """Handle new order."""
-        logger.info(f"Order placed: {order.ticket}")
+        logger.info(f"Order placed: {order.ticket} | {order.symbol} | SL: {order.sl} | TP: {order.tp}")
         self.ui.terminal.update_trade_table()
         self.ui.status_bar.showMessage(f"Order {order.ticket} placed successfully", 3000)
     
@@ -238,6 +255,12 @@ class MainWindow(QMainWindow):
     def _on_order_closed(self, order: Order):
         """Handle order closed."""
         logger.info(f"Order closed: {order.ticket}")
+        
+        # Log to Journal
+        reason = order.comment if order.comment else "Manual"
+        log_msg = f"Order Closed: {order.ticket} {order.symbol} P/L: {order.profit:.2f} ({reason})"
+        self.ui.terminal.log_message(log_msg)
+        
         self.ui.terminal.update_trade_table()
 
         self.ui.status_bar.showMessage(f"Order {order.ticket} closed", 3000)
@@ -286,7 +309,13 @@ class MainWindow(QMainWindow):
         """Handle order placement from dialog."""
         try:
             logger.info(f"Placing order: {order_data}")
-            from data.models import OrderType
+            
+            # Check for Paper Trading
+            if execution_service.paper_trading:
+                logger.info(f"[PAPER] Manual Order: {order_data}")
+                self.ui.status_bar.showMessage(f"[PAPER] Order Placed: {order_data['symbol']} {order_data['side']}", 3000)
+                return
+
             
             side = order_data['side']
             o_type = order_data['order_type']
@@ -336,9 +365,56 @@ class MainWindow(QMainWindow):
             ea_manager.ea_stopped.connect(lambda name: self.ui.status_bar.showMessage(f"EA Stopped: {name}", 3000))
             ea_manager.ea_error.connect(self._on_ea_error)
             
+            try: execution_service.order_placed.disconnect(self._on_order_placed)
+            except TypeError: pass
             execution_service.order_placed.connect(self._on_order_placed)
+            
+            try: execution_service.order_rejected.disconnect(self._on_order_rejected)
+            except TypeError: pass
             execution_service.order_rejected.connect(self._on_order_rejected)
             
+            # Connect to Position Tracker (CRITICAL for SL/TP monitoring)
+            try: execution_service.order_placed.disconnect(position_tracker.update_position)
+            except TypeError: pass
+            execution_service.order_placed.connect(position_tracker.update_position)
+            
+            try: execution_service.order_filled.disconnect(position_tracker.update_position)
+            except TypeError: pass
+            execution_service.order_filled.connect(position_tracker.update_position)
+            
+            # --- EA STATISTICS WIRING ---
+            # Connect order updates to EA Manager for stats tracking
+            try: execution_service.order_placed.disconnect(ea_manager.on_order_update)
+            except TypeError: pass
+            execution_service.order_placed.connect(ea_manager.on_order_update)
+            
+            try: execution_service.order_closed.disconnect(ea_manager.on_order_update)
+            except TypeError: pass
+            execution_service.order_closed.connect(ea_manager.on_order_update)
+            
+            try: event_bus.order_closed.disconnect(ea_manager.on_order_update)
+            except TypeError: pass
+            event_bus.order_closed.connect(ea_manager.on_order_update)
+            # ----------------------------
+            
+            # --- CRITICAL WIRING ---
+            # 1. Connect EA Signals to Execution Service (Auto-Trading)
+            try: ea_manager.signal_generated.disconnect(execution_service.execute_signal)
+            except TypeError: pass
+            ea_manager.signal_generated.connect(execution_service.execute_signal)
+            
+            # 2. Connect Trailing Stop Updates to Execution Service
+            # Note: Lambda functions are hard to disconnect by reference. 
+            # We'll use a named method or just accept this one might duplicate if not careful.
+            # Ideally, we should define a wrapper method.
+            # For now, let's assume this one is less critical or fix it properly.
+            
+            # Better approach: Define a slot for trailing stop
+            try: position_tracker.trailing_stop_updated.disconnect(self._on_trailing_stop_updated)
+            except TypeError: pass
+            position_tracker.trailing_stop_updated.connect(self._on_trailing_stop_updated)
+            # -----------------------
+
             position_tracker.position_opened.connect(lambda p: logger.info(f"Position opened: {p.symbol}"))
             position_tracker.position_closed.connect(lambda p: logger.info(f"Position closed: {p.symbol} P/L: {p.profit:.2f}"))
             
@@ -418,6 +494,10 @@ class MainWindow(QMainWindow):
     def _on_order_rejected(self, ea_name: str, reason: str):
         logger.warning(f"Order rejected from {ea_name}: {reason}")
         self.ui.status_bar.showMessage(f"Order rejected: {reason}", 5000)
+
+    def _on_trailing_stop_updated(self, ticket: int, sl: float):
+        """Handle trailing stop update."""
+        execution_service.modify_position(ticket, sl=sl)
 
     def closeEvent(self, event):
         """Handle application close."""

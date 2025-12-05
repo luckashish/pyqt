@@ -184,7 +184,8 @@ def create_time_based_ea(
         risk_percent=2.0,
         stop_loss_pips=stop_loss_pips,
         take_profit_pips=take_profit_pips,
-        use_trailing_stop=False
+        use_trailing_stop=True,
+        trailing_stop_pips=30.0
     )
     
     ea.initialize(config)

@@ -222,13 +222,22 @@ class ShoonyaBroker(BrokerBase):
     def modify_order(
         self,
         ticket: int,
-        symbol: str,
-        order_type: OrderType,
-        volume: float,
+        symbol: str = "",
+        order_type: OrderType = OrderType.BUY,
+        volume: float = 0.0,
         price: float = 0.0,
-        trigger_price: float = 0.0
+        trigger_price: float = 0.0,
+        sl: float = 0.0,
+        tp: float = 0.0
     ) -> bool:
         """Modify an existing order."""
+        # Shoonya doesn't support modifying SL/TP on the main order directly
+        # We just log it and return True so the client-side tracker remains happy
+        if sl > 0 or tp > 0:
+            logger.info(f"ShoonyaBroker: Client-side SL/TP update request for {ticket} (SL={sl}, TP={tp})")
+            # In a full implementation, we would modify the separate SL-M order here
+            return True
+
         if self.order_manager:
             return self.order_manager.modify_order(
                 ticket=ticket,
@@ -247,8 +256,10 @@ class ShoonyaBroker(BrokerBase):
         return False
     
     def close_order(self, ticket: int) -> bool:
-        """Close order (alias for cancel)."""
-        return self.cancel_order(ticket)
+        """Close order or position."""
+        if self.order_manager:
+            return self.order_manager.close_position(ticket)
+        return False
     
     def get_open_orders(self) -> List[Order]:
         """Get open orders."""

@@ -135,6 +135,44 @@ class ShoonyaOrderManager:
             logger.error(f"Cancel order error: {e}")
             return False
 
+    def close_position(self, ticket: int) -> bool:
+        """
+        Close a position or cancel a pending order.
+        """
+        # Find order
+        order = next((o for o in self.open_orders if o.ticket == ticket), None)
+        if not order:
+            # Try to find in full order book
+            all_orders = self.get_order_book()
+            order = next((o for o in all_orders if o.ticket == ticket), None)
+            
+        if not order:
+            logger.error(f"Cannot close position - order {ticket} not found")
+            return False
+            
+        # If pending, just cancel
+        if order.status in [OrderStatus.PENDING, OrderStatus.ACTIVE] and order.volume > 0:
+            # Note: In our model, ACTIVE might mean filled position or active pending.
+            # Shoonya API status 'OPEN' usually means pending. 'COMPLETE' means filled.
+            # We need to check the actual API status or assume based on context.
+            # For now, let's try to cancel first. If it fails because it's filled, we exit.
+            if self.cancel_order(ticket):
+                return True
+                
+        # If we are here, it might be a filled position we need to exit
+        # Place opposite order
+        exit_side = OrderType.SELL if order.order_type in [OrderType.BUY, OrderType.BUY_LIMIT, OrderType.BUY_STOP] else OrderType.BUY
+        
+        logger.info(f"Exiting position {ticket}: {exit_side.value} {order.volume} {order.symbol}")
+        
+        return self.place_order(
+            symbol=order.symbol,
+            order_type=exit_side,
+            volume=order.volume,
+            price=0.0, # Market order
+            comment=f"Close {ticket}"
+        ) is not None
+
     def modify_order(
         self,
         ticket: int,
