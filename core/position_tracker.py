@@ -42,6 +42,9 @@ class PositionTracker(QObject):
         self.open_positions: Dict[int, Order] = {}  # ticket -> Order
         self.closed_positions: List[Order] = []
         
+        # Price cache for P&L calculation
+        self.current_prices: Dict[str, float] = {}  # symbol -> latest price
+        
         # Trailing stop settings
         self.trailing_stops: Dict[int, dict] = {}  # ticket -> {pips, highest/lowest}
         
@@ -153,6 +156,28 @@ class PositionTracker(QObject):
             pnl = order.calculate_profit(current_price)
             total_pnl += pnl
             
+        return total_pnl
+    
+    def get_unrealized_pnl_for_ea(self, ea_name: str) -> float:
+        """
+        Calculate unrealized P&L for a specific EA.
+        
+        Args:
+            ea_name: Name of the EA
+            
+        Returns:
+            Total unrealized P&L for this EA's open positions
+        """
+        total_pnl = 0.0
+        
+        for order in self.open_positions.values():
+            # Check if this order belongs to the EA (by comment)
+            if order.comment and order.comment.startswith(ea_name):
+                # Get current price from cache
+                current_price = self.current_prices.get(order.symbol, order.open_price)
+                pnl = order.calculate_profit(current_price)
+                total_pnl += pnl
+                
         return total_pnl
         
     def enable_trailing_stop(
@@ -294,6 +319,9 @@ class PositionTracker(QObject):
         current_price = symbol.last
         if not current_price:
             return
+        
+        # Cache current price for P&L calculation
+        self.current_prices[symbol.name] = current_price
             
         # logger.debug(f"Tick received for {symbol.name}: {current_price}")
 

@@ -138,8 +138,22 @@ class EAConfigDialog(QDialog):
                         widget.setEnabled(param_value)
                         checkbox.toggled.connect(widget.setEnabled)
                         
-                        display_name = target_param.replace('_', ' ').title() + ":"
-                        sub_layout.addRow(display_name, widget)
+                        # For level parameters, add "Get LTP" button
+                        if target_param.endswith('_level') or target_param.endswith('_price'):
+                            level_layout = QHBoxLayout()
+                            level_layout.addWidget(widget)
+                            
+                            ltp_btn = QPushButton("Get LTP")
+                            ltp_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 4px 8px;")
+                            ltp_btn.setMaximumWidth(80)
+                            ltp_btn.clicked.connect(lambda checked, w=widget: self._fetch_and_set_ltp(w))
+                            level_layout.addWidget(ltp_btn)
+                            
+                            display_name = target_param.replace('_', ' ').title() + ":"
+                            sub_layout.addRow(display_name, level_layout)
+                        else:
+                            display_name = target_param.replace('_', ' ').title() + ":"
+                            sub_layout.addRow(display_name, widget)
                         
                         layout.addRow(sub_group)
                         
@@ -346,3 +360,82 @@ class EAConfigDialog(QDialog):
         except Exception as e:
             logger.error(f"Error saving EA config: {e}")
             QMessageBox.critical(self, "Error", f"Failed to save configuration: {e}")
+    
+    def _fetch_and_set_ltp(self, widget):
+        """Fetch current LTP for the configured symbol and set it to the widget."""
+        try:
+            symbol_name = self.symbol_edit.text().strip()
+            
+            if not symbol_name:
+                QMessageBox.warning(self, "No Symbol", "Please enter a symbol first.")
+                return
+            
+            # Get broker from main window (traverse up the widget hierarchy)
+            broker = None
+            current_widget = self.parent()
+            
+            # Try to find the main window with broker attribute
+            while current_widget is not None:
+                if hasattr(current_widget, 'broker'):
+                    broker = current_widget.broker
+                    break
+                current_widget = current_widget.parent()
+            
+            if broker is None:
+                QMessageBox.warning(self, "No Broker", "Broker connection not available.")
+                return
+            
+            # Try to get symbol info from broker
+            symbol_info = broker.get_symbol_info(symbol_name)
+            ltp = None
+            
+            if symbol_info:
+                ltp = symbol_info.last
+                logger.info(f"Got LTP from broker for {symbol_name}: {ltp}")
+            
+            # If no valid price from broker, try position tracker cache (always try if no price)
+            if ltp is None or ltp == 0:
+                from core.position_tracker import position_tracker
+                cached_ltp = position_tracker.current_prices.get(symbol_name)
+                if cached_ltp and cached_ltp > 0:
+                    ltp = cached_ltp
+                    logger.info(f"Got LTP from position tracker cache for {symbol_name}: {ltp}")
+            
+            # If still no price, show detailed error
+            if ltp is None or ltp == 0:
+                error_msg = f"No price data available for {symbol_name}.\n\n"
+                
+                if symbol_info is None:
+                    error_msg += "Symbol not found in broker.\n\n"
+                    error_msg += "Please check:\n"
+                    error_msg += "1. Symbol format is correct (e.g., MCX|463007)\n"
+                    error_msg += "2. Symbol is added to Market Watch\n"
+                    error_msg += "3. Broker is connected\n\n"
+                else:
+                    error_msg += "Symbol found but no price data.\n\n"
+                    error_msg += "This is likely because:\n"
+                    error_msg += "• Market is closed (opens at 9:15 AM)\n"
+                    error_msg += "• Pre-market data not available yet\n\n"
+                
+                error_msg += "You can enter the price manually for now."
+                
+                QMessageBox.warning(self, "No Price Data", error_msg)
+                logger.warning(f"No LTP available for {symbol_name}. symbol_info={symbol_info}, ltp={ltp}")
+                return
+            
+            # Set to widget
+            if isinstance(widget, QDoubleSpinBox):
+                widget.setValue(ltp)
+            elif isinstance(widget, QLineEdit):
+                widget.setText(str(ltp))
+            
+            logger.info(f"Set LTP for {symbol_name}: {ltp}")
+            QMessageBox.information(
+                self,
+                "LTP Updated",
+                f"Current price for {symbol_name}:\n{ltp:.2f}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error fetching LTP: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to fetch LTP:\n{str(e)}")

@@ -200,7 +200,8 @@ class EAState:
     open_positions: int = 0
     total_trades: int = 0
     winning_trades: int = 0
-    profit: float = 0.0
+    profit: float = 0.0  # Realized profit from closed trades
+    floating_profit: float = 0.0  # Unrealized profit from open positions
     last_signal: Optional['EASignal'] = None
     error_message: str = ""
     started_time: Optional[datetime] = None
@@ -212,6 +213,11 @@ class EAState:
         if self.total_trades == 0:
             return 0.0
         return round((self.winning_trades / self.total_trades) * 100, 2)
+    
+    @property
+    def total_profit(self) -> float:
+        """Calculate total profit (realized + unrealized)."""
+        return self.profit + self.floating_profit
 
 
 @dataclass

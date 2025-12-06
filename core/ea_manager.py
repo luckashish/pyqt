@@ -214,6 +214,23 @@ class EAManager(QObject):
                     except Exception as e:
                         logger.error(f"Error in EA '{ea_name}' on_tick: {e}")
                         self._on_ea_error(ea_name, str(e))
+        
+        # Update floating P&L for all running EAs
+        from core.position_tracker import position_tracker
+        for ea_name in self.running_eas:
+            ea = self.eas[ea_name]
+            try:
+                # Calculate unrealized P&L for this EA
+                floating_pnl = position_tracker.get_unrealized_pnl_for_ea(ea_name)
+                
+                # Update EA state
+                ea.state.floating_profit = floating_pnl
+                
+                # Emit state change to update UI
+                if floating_pnl != 0:  # Only emit if there's floating P&L
+                    ea._emit_state_changed()
+            except Exception as e:
+                logger.error(f"Error updating floating P&L for '{ea_name}': {e}")
                     
     def on_bar(self, symbol: str, bar: OHLCData):
         """

@@ -197,13 +197,14 @@ class EAControlPanel(QWidget):
             self.ea_table.setItem(row, 4, trades_item)
             
             # Profit
-            profit_item = QTableWidgetItem(f"${state.profit:.2f}")
+            total_profit_value = state.total_profit  # Realized + Unrealized
+            profit_item = QTableWidgetItem(f"${total_profit_value:.2f}")
             profit_item.setFlags(profit_item.flags() & ~Qt.ItemIsEditable)
             profit_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             
-            if state.profit > 0:
+            if total_profit_value > 0:
                 profit_item.setForeground(QColor("#4CAF50"))
-            elif state.profit < 0:
+            elif total_profit_value < 0:
                 profit_item.setForeground(QColor("#f44336"))
                 
             self.ea_table.setItem(row, 5, profit_item)
@@ -215,7 +216,7 @@ class EAControlPanel(QWidget):
             self.ea_table.setItem(row, 6, wr_item)
             
             # Accumulate stats
-            total_profit += state.profit
+            total_profit += state.total_profit  # Include floating profit
             total_trades += state.total_trades
             
             # Count open positions from state
